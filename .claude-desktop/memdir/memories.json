@@ -1,0 +1,443 @@
+[
+  {
+    "id": "mem_l1_apple_cleanroom",
+    "layer": "L1",
+    "title": "Apple 纯白极简美学与零妥协工程品质",
+    "content": "桌面界面严格遵循 Apple 官网日光纯白毛玻璃美学（#FFFFFF / #F5F5F7）与弹簧物理反馈；功能设计坚持高内聚、无冗余按钮、开箱即用。",
+    "keywords": [
+      "apple",
+      "纯白",
+      "设计",
+      "美学",
+      "极简",
+      "动画",
+      "ui"
+    ],
+    "tags": [
+      "philosophy",
+      "design-system",
+      "ux"
+    ],
+    "links": [],
+    "importance": 0.98,
+    "confidence": 0.99,
+    "accessCount": 10,
+    "source": "seed",
+    "createdAt": 1793585716650,
+    "updatedAt": 1793589316650,
+    "lastRecalledAt": 1793600259170
+  },
+  {
+    "id": "mem_l1_safety_autonomy",
+    "layer": "L1",
+    "title": "智能体自主性与可控安全边界平衡",
+    "content": "尊重当前激活的 Claude Code 权限模式（Default / AcceptEdits / Plan / Bypass），在修改任何代码前必须先只读勘探上下文，绝不凭空臆测或破坏用户本地配置。",
+    "keywords": [
+      "plan",
+      "bypass",
+      "权限",
+      "安全",
+      "只读",
+      "config"
+    ],
+    "tags": [
+      "philosophy",
+      "safety",
+      "permission"
+    ],
+    "links": [],
+    "importance": 0.96,
+    "confidence": 0.99,
+    "accessCount": 9,
+    "source": "seed",
+    "createdAt": 1793585716650,
+    "updatedAt": 1793589316650,
+    "lastRecalledAt": 1793600259170
+  },
+  {
+    "id": "mem_l2_abc_trinity",
+    "layer": "L2",
+    "title": "Claude Code Studio A+B+C 三位一体架构契约",
+    "content": "工作区 (复刻ing) 采用 Electron + React + TypeScript 构建：A 为 Codex 侧栏 + Claude Code 引擎工作台（集成 Skills 与 MCP），B 为 Git Worktree 隔离的 Swarm 多智能体 DAG 编排，C 为 KAIROS 守护与 L1-L5 分层自演化记忆系统。",
+    "keywords": [
+      "架构",
+      "electron",
+      "workbench",
+      "swarm",
+      "kairos",
+      "skills",
+      "mcp",
+      "codex"
+    ],
+    "tags": [
+      "architecture",
+      "core-modules"
+    ],
+    "links": [],
+    "importance": 0.92,
+    "confidence": 0.96,
+    "accessCount": 9,
+    "source": "seed",
+    "createdAt": 1793587516650,
+    "updatedAt": 1793591116650,
+    "lastRecalledAt": 1793614859739
+  },
+  {
+    "id": "mem_l3_node_toolchain",
+    "layer": "L3",
+    "title": "macOS Homebrew Node 工具链与类型校验工作流",
+    "content": "本机 Node 与 npm 位于 /opt/homebrew/bin/node；完成跨进程 IPC 或组件修改后，优先执行 tsc --noEmit 与 electron-vite build 验证零类型错误。",
+    "keywords": [
+      "node",
+      "homebrew",
+      "tsc",
+      "build",
+      "编译",
+      "构建",
+      "终端"
+    ],
+    "tags": [
+      "workflow",
+      "toolchain",
+      "verification"
+    ],
+    "links": [],
+    "importance": 0.86,
+    "confidence": 0.95,
+    "accessCount": 2,
+    "source": "seed",
+    "createdAt": 1793588116650,
+    "updatedAt": 1793591116650
+  },
+  {
+    "id": "mem_l4_memdir_cap",
+    "layer": "L4",
+    "title": "防范 MEMORY.md 超过 200 行导致上下文静默截断",
+    "content": "借鉴 Claude Code 源码 memdir 教训：根索引 MEMORY.md 必须保持在 200 行以内作为轻量指针索引，具体知识按 L1-L5 分层落盘并在每次询问时动态检索回调，避免全量塞入导致 Token 膨胀。",
+    "keywords": [
+      "memory",
+      "200行",
+      "记忆",
+      "token",
+      "压缩",
+      "检索",
+      "memdir"
+    ],
+    "tags": [
+      "pitfall",
+      "memory",
+      "context-window"
+    ],
+    "links": [],
+    "importance": 0.84,
+    "confidence": 0.94,
+    "accessCount": 2,
+    "source": "seed",
+    "createdAt": 1793589316650,
+    "updatedAt": 1793591716650
+  },
+  {
+    "id": "mem_l5_chinese_claude_format",
+    "layer": "L5",
+    "title": "中文凝练沟通与 Claude Code 树状输出偏好",
+    "content": "用户偏好使用简洁清晰的中文沟通，推理与工具输出保持 Claude Code 原生 ✻ 思考折叠块与 ⏺ / ⎿ 树状结构，模式切换集成于输入框左下角（支持 Shift+Tab）。",
+    "keywords": [
+      "中文",
+      "格式",
+      "思考",
+      "动画",
+      "输入框",
+      "shift+tab",
+      "偏好"
+    ],
+    "tags": [
+      "preference",
+      "style",
+      "interaction"
+    ],
+    "links": [],
+    "importance": 0.82,
+    "confidence": 0.95,
+    "accessCount": 6,
+    "source": "seed",
+    "createdAt": 1793589316650,
+    "updatedAt": 1793592016650,
+    "lastRecalledAt": 1793593038081
+  },
+  {
+    "id": "mem_l3_mvyr06qv_o3h",
+    "layer": "L3",
+    "title": "能力说明书编写前先扫描真实代码事实",
+    "content": "完善《我能帮你做什么》能力说明书时，先并行执行 search_files/read_file 定位文档，再用 run_bash 遍历 src/main 各模块（engine/context/memory/coordinator/daemon/tools）、ToolRegistry 工具名、config.json 与权限字段，确保文档描述与真实实现一致，避免凭空杜撰能力。",
+    "keywords": [
+      "能力说明书",
+      "代码事实核对",
+      "ToolRegistry",
+      "文档一致性"
+    ],
+    "tags": [
+      "文档工作流",
+      "验证SOP"
+    ],
+    "links": [],
+    "importance": 0.82,
+    "confidence": 0.9,
+    "accessCount": 2,
+    "source": "auto_turn",
+    "createdAt": 1793593070887,
+    "updatedAt": 1793593070887,
+    "lastRecalledAt": 1793679207126
+  },
+  {
+    "id": "mem_l3_mvys5isw_skr",
+    "layer": "L3",
+    "title": "能力说明书分段拼接更新法",
+    "content": "更新《我能帮你做什么》等长文档时，先用 sed 分段读取并写入 /tmp 临时文件，再用 write_file 重建主文件并保留 <!-- APPEND-HERE --> 锚点，最后用 edit_file 在锚点处追加新章节，避免整文件重写导致内容丢失。",
+    "keywords": [
+      "能力说明书",
+      "分段拼接",
+      "APPEND-HERE",
+      "edit_file"
+    ],
+    "tags": [
+      "文档维护",
+      "工作流"
+    ],
+    "links": [
+      "mem_l3_mvyr06qv_o3h"
+    ],
+    "importance": 0.8,
+    "confidence": 0.9,
+    "accessCount": 5,
+    "source": "auto_turn",
+    "createdAt": 1793594999408,
+    "updatedAt": 1793594999408,
+    "lastRecalledAt": 1793679207126
+  },
+  {
+    "id": "mem_l4_mvytwqv3_w5v",
+    "layer": "L4",
+    "title": "Electron 打包前需修复外部依赖路径",
+    "content": "复刻ing 项目封装为 macOS .app 前，必须核查 src/main 中 spawn/exec 调用的外部二进制（如 claude CLI）路径，避免打包后因相对路径失效导致运行时静默失败。",
+    "keywords": [
+      "Electron打包",
+      "spawn路径",
+      "外部二进制",
+      "macOS App"
+    ],
+    "tags": [
+      "打包部署",
+      "踩坑教训"
+    ],
+    "links": [
+      "mem_l4_mvyvasz8_9in"
+    ],
+    "importance": 0.82,
+    "confidence": 0.9,
+    "accessCount": 4,
+    "source": "auto_turn",
+    "createdAt": 1793597949183,
+    "updatedAt": 1793597949183,
+    "lastRecalledAt": 1793601670560
+  },
+  {
+    "id": "mem_l4_mvyuu7jt_mll",
+    "layer": "L4",
+    "title": "复刻ing 封装可行性评估结论",
+    "content": "复刻ing 项目已具备 electron-builder 打包配置与 out 构建产物，但封装前需确认 resources 图标 icns 存在、src/main 中 spawn/exec 调用的 claude CLI 等外部二进制路径在 .app 内可解析，且 process.cwd() 用法需改为 app.getPath 以适配打包后路径。",
+    "keywords": [
+      "封装可行性",
+      "electron-builder",
+      "外部二进制",
+      "process.cwd",
+      "icns"
+    ],
+    "tags": [
+      "Electron打包",
+      "踩坑预防"
+    ],
+    "links": [
+      "mem_l4_mvyvasz8_9in"
+    ],
+    "importance": 0.82,
+    "confidence": 0.9,
+    "accessCount": 3,
+    "source": "auto_turn",
+    "createdAt": 1793599510457,
+    "updatedAt": 1793599510457,
+    "lastRecalledAt": 1793601670560
+  },
+  {
+    "id": "mem_l4_mvyvasz8_9in",
+    "layer": "L4",
+    "title": "复刻ing 打包阻塞点与静默隐患",
+    "content": "复刻ing 项目结构完整可封装，但存在 1 个直接阻塞打包的问题及 3 个打包后静默出错隐患；dist/ 目录不存在，说明从未成功产出过安装包。resources/mac-doc-helper 为仅 arm64 的 Mach-O 二进制，跨架构分发需注意。",
+    "keywords": [
+      "复刻ing",
+      "打包阻塞",
+      "mac-doc-helper",
+      "arm64",
+      "dist缺失"
+    ],
+    "tags": [
+      "Electron打包",
+      "踩坑教训"
+    ],
+    "links": [
+      "mem_l4_mvyuu7jt_mll",
+      "mem_l4_mvytwqv3_w5v"
+    ],
+    "importance": 0.85,
+    "confidence": 0.9,
+    "accessCount": 3,
+    "source": "auto_turn",
+    "createdAt": 1793600284724,
+    "updatedAt": 1793600284724,
+    "lastRecalledAt": 1793679207126
+  },
+  {
+    "id": "mem_l3_mvyw5m70_cer",
+    "layer": "L3",
+    "title": "GitHub 实时项目检索工作流",
+    "content": "为用户推荐 GitHub 开源项目时，先用 curl 调 GitHub Search API（stars:>2000 过滤）与 trending 页面抓取实时快照，再用 for 循环批量拉取候选仓库元数据，最后按主题分组呈现并附链接。",
+    "keywords": [
+      "GitHub API",
+      "trending",
+      "项目推荐",
+      "curl"
+    ],
+    "tags": [
+      "工作流",
+      "检索"
+    ],
+    "links": [
+      "mem_l3_mw05o7ur_wb8"
+    ],
+    "importance": 0.75,
+    "confidence": 0.9,
+    "accessCount": 2,
+    "source": "auto_turn",
+    "createdAt": 1793601722268,
+    "updatedAt": 1793601722268,
+    "lastRecalledAt": 1793601798671
+  },
+  {
+    "id": "mem_l4_mvyw9v6x_766",
+    "layer": "L4",
+    "title": "国内展讯类实时检索的抓取坑点",
+    "content": "检索北京书法展等国内展讯时，Bing/360/搜狗/DuckDuckGo 返回 JS 渲染外壳抓不到正文；雅昌展览列表异步加载；namoc.org 与 chnmuseum.cn 本地 DNS 解析失败。可靠入口为 dpm.org.cn/shows.html、bjaa.com.cn、chncpa.org、exhibit.artron.net，中国美术馆展讯需走微信公众号。",
+    "keywords": [
+      "展讯检索",
+      "JS渲染",
+      "DNS失败",
+      "雅昌",
+      "中国美术馆"
+    ],
+    "tags": [
+      "网络抓取",
+      "踩坑教训"
+    ],
+    "links": [],
+    "importance": 0.8,
+    "confidence": 0.9,
+    "accessCount": 1,
+    "source": "auto_turn",
+    "createdAt": 1793601920553,
+    "updatedAt": 1793601920553
+  },
+  {
+    "id": "mem_l4_mvz3zm61_inn",
+    "layer": "L4",
+    "title": "git-forensics-mcp 返回数与实际提交数需交叉核验",
+    "content": "调用 git-forensics-mcp 的 git_recent_commits 请求 N 条记录时，若仓库实际提交数不足 N，工具可能不显式报错。必须用 git rev-list --count HEAD 交叉核验真实提交总数，再决定总结口径，避免按不存在的提交数编造演进叙事。",
+    "keywords": [
+      "git-forensics-mcp",
+      "git_recent_commits",
+      "rev-list --count",
+      "交叉核验"
+    ],
+    "tags": [
+      "工具使用",
+      "数据核验"
+    ],
+    "links": [],
+    "importance": 0.82,
+    "confidence": 0.9,
+    "accessCount": 1,
+    "source": "auto_turn",
+    "createdAt": 1793614879224,
+    "updatedAt": 1793614879224
+  },
+  {
+    "id": "mem_l4_mvz3zm67_t62",
+    "layer": "L4",
+    "title": "复刻ing 架构演进主体仍在未提交工作区",
+    "content": "复刻ing 仓库仅 1 次提交 e855edb（34 文件 +8105 行，A+B+C 骨架），而工作区有 25 文件 +6113/−1482 行未提交改动。总结架构演进时应对比「已提交骨架 vs 未提交演进」，并提示用户提交，而非按提交历史还原。",
+    "keywords": [
+      "复刻ing",
+      "未提交改动",
+      "e855edb",
+      "架构演进"
+    ],
+    "tags": [
+      "项目事实",
+      "版本控制"
+    ],
+    "links": [],
+    "importance": 0.85,
+    "confidence": 0.9,
+    "accessCount": 1,
+    "source": "auto_turn",
+    "createdAt": 1793614879231,
+    "updatedAt": 1793614879231
+  },
+  {
+    "id": "mem_l3_mw05o7ur_wb8",
+    "layer": "L3",
+    "title": "学术论文引文网络实时检索工作流",
+    "content": "为用户找某篇论文的相关工作时，先用 OpenAlex 查 https://api.openalex.org/works/doi:{DOI} 取 referenced_works 与 cited_by_api_url，逐条取标题/DOI/arXiv ID，再用 arXiv API 查预印本链接；最终按“关系类型+链接”输出优先级表格。",
+    "keywords": [
+      "OpenAlex",
+      "引文网络",
+      "DOI",
+      "arXiv",
+      "相关工作"
+    ],
+    "tags": [
+      "学术检索",
+      "工作流"
+    ],
+    "links": [
+      "mem_l3_mvyw5m70_cer"
+    ],
+    "importance": 0.86,
+    "confidence": 0.9,
+    "accessCount": 1,
+    "source": "auto_turn",
+    "createdAt": 1793678172867,
+    "updatedAt": 1793678172867
+  },
+  {
+    "id": "mem_l4_mw05o7v1_xfv",
+    "layer": "L4",
+    "title": "Semantic Scholar 429 限流需降级 OpenAlex",
+    "content": "Semantic Scholar API 高频调用易返回 429 限流，应直接降级到 OpenAlex（免密钥、覆盖广）；另 open_access 为 False 不等同无预印本，仍须用 export.arxiv.org/api/query 独立核验后再下结论。",
+    "keywords": [
+      "Semantic Scholar",
+      "429",
+      "OpenAlex",
+      "open_access"
+    ],
+    "tags": [
+      "踩坑教训",
+      "API限流"
+    ],
+    "links": [],
+    "importance": 0.78,
+    "confidence": 0.9,
+    "accessCount": 1,
+    "source": "auto_turn",
+    "createdAt": 1793678172877,
+    "updatedAt": 1793678172877
+  }
+]

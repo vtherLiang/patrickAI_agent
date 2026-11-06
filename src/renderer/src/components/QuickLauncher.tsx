@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Command, Send, GitBranch, Sparkles, X } from 'lucide-react'
+import { Search, ArrowUp, GitBranch, Sparkles } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 
 export const QuickLauncher: React.FC = () => {
@@ -17,7 +17,7 @@ export const QuickLauncher: React.FC = () => {
 
   useEffect(() => {
     if (isQuickLauncherOpen) {
-      setTimeout(() => inputRef.current?.focus(), 50)
+      setTimeout(() => inputRef.current?.focus(), 40)
     }
   }, [isQuickLauncherOpen])
 
@@ -42,10 +42,16 @@ export const QuickLauncher: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center pt-28">
-      <div className="w-full max-w-2xl rounded-2xl bg-[#14171c] border border-[#d97757]/50 shadow-2xl overflow-hidden">
-        <div className="px-4 py-3.5 flex items-center gap-3 border-b border-[#282e39]">
-          <Command className="w-5 h-5 text-[#d97757]" />
+    <div
+      onClick={() => setQuickLauncherOpen(false)}
+      className="animate-apple-backdrop fixed inset-0 z-50 bg-black/20 backdrop-blur-sm flex items-start justify-center pt-28 px-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="animate-apple-modal w-full max-w-xl rounded-[24px] apple-glass-Heavy overflow-hidden"
+      >
+        <div className="px-5 py-4 flex items-center gap-3.5">
+          <Search className="w-5 h-5 text-[#86868b] shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -60,46 +66,47 @@ export const QuickLauncher: React.FC = () => {
                 setQuickLauncherOpen(false)
               }
             }}
-            placeholder="KAIROS 快捷指令框 (⌥ + Space 随时呼出)：输入任务按 Enter 交由工作台，⌘+Enter 启动多 Agent 集群..."
-            className="flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+            placeholder="快速指派任务或搜索指令..."
+            className="flex-1 bg-transparent text-[16px] text-[#1d1d1f] placeholder-[#86868b] focus:outline-none tracking-tight"
           />
-          <button
-            onClick={() => setQuickLauncherOpen(false)}
-            className="p-1 rounded-lg hover:bg-[#252a35] text-slate-400"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="p-3 bg-[#0d0f12] flex items-center justify-between text-xs text-slate-400">
-          <div className="flex items-center gap-2">
+          {query.trim() && (
             <button
               onClick={handleDispatchWorkbench}
-              className="px-3 py-1.5 rounded-lg bg-[#1b1f27] hover:bg-[#d97757] hover:text-white border border-[#282e39] flex items-center gap-1.5 transition"
+              className="apple-press w-7 h-7 rounded-full bg-[#1d1d1f] text-white flex items-center justify-center shrink-0"
             >
-              <Send className="w-3.5 h-3.5" />
-              <span>发送至工作台 (Enter)</span>
+              <ArrowUp className="w-4 h-4 stroke-[2.5]" />
             </button>
+          )}
+        </div>
+
+        <div className="px-5 py-2.5 bg-[#F5F5F7]/80 border-t border-black/[0.06] flex items-center justify-between text-[11px] text-[#6e6e73]">
+          <div className="flex items-center gap-3">
             <button
               onClick={handleDispatchSwarm}
-              className="px-3 py-1.5 rounded-lg bg-[#1b1f27] hover:bg-amber-600 hover:text-white border border-[#282e39] flex items-center gap-1.5 transition"
+              disabled={!query.trim()}
+              className="apple-press disabled:opacity-40 hover:text-[#1d1d1f] flex items-center gap-1 transition-colors"
             >
-              <GitBranch className="w-3.5 h-3.5" />
-              <span>派发给 Coordinator 集群 (⌘+Enter)</span>
+              <GitBranch className="w-3 h-3 text-[#28CD41]" />
+              <span>集群并行</span>
+              <kbd className="font-mono text-[#86868b] ml-0.5">⌘↵</kbd>
             </button>
+
+            <span className="text-black/15">|</span>
+
             <button
               onClick={async () => {
                 setQuickLauncherOpen(false)
                 setActiveMode('kairos')
                 await triggerDream()
               }}
-              className="px-3 py-1.5 rounded-lg bg-[#1b1f27] hover:bg-indigo-600 hover:text-white border border-[#282e39] flex items-center gap-1.5 transition"
+              className="apple-press hover:text-[#1d1d1f] flex items-center gap-1 transition-colors"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>立即执行 Dream 记忆提炼</span>
+              <Sparkles className="w-3 h-3 text-[#5856D6]" />
+              <span>立即提炼记忆</span>
             </button>
           </div>
-          <span className="font-mono text-[11px]">ESC 关闭</span>
+
+          <span className="font-mono text-[10px] text-[#86868b]">ESC 关闭</span>
         </div>
       </div>
     </div>

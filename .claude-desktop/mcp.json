@@ -1,0 +1,105 @@
+[
+  {
+    "id": "git-forensics-mcp",
+    "name": "Git Forensics & Blame MCP",
+    "transport": "stdio",
+    "command": "builtin:git-forensics",
+    "args": [
+      "--stdio"
+    ],
+    "enabled": true,
+    "status": "connected",
+    "installedBy": "preset",
+    "category": "版本控制与代码溯源",
+    "summary": "提供 Git 提交演进历史、单文件 Blame 责任行追踪与分支差异摘要的原生 MCP 服务。",
+    "explanation": "通过 Model Context Protocol 标准暴露仓库版本演进上下文。相比直接裸跑零散 git 命令，该 MCP 服务返回经过结构化清洗的提交图谱、热点变更文件排行与逐行溯源元数据，显著降低上下文 Token 消耗。",
+    "tools": [
+      {
+        "name": "git_recent_commits",
+        "description": "获取最近 N 次 Git 提交记录、作者与变更统计摘要",
+        "inputExample": "{\"limit\": 8}"
+      },
+      {
+        "name": "git_file_blame",
+        "description": "追踪指定文件行区间的最后修改提交与变更动机",
+        "inputExample": "{\"file_path\": \"src/main/index.ts\", \"start_line\": 1, \"end_line\": 40}"
+      }
+    ],
+    "usageExamples": [
+      {
+        "title": "分析当前仓库近期提交演进脉络",
+        "prompt": "请调用 git-forensics-mcp 的工具查看最近 8 次提交记录并总结核心架构演进。"
+      },
+      {
+        "title": "对核心入口文件进行 Git Blame 代码溯源",
+        "prompt": "使用 MCP 工具追踪 src/main/index.ts 前 40 行的提交溯源信息。"
+      }
+    ],
+    "lastCheckedAt": 1793592916650
+  },
+  {
+    "id": "binary-re-bridge-mcp",
+    "name": "Binary Triage & Mach-O/ELF Bridge MCP",
+    "transport": "stdio",
+    "command": "builtin:binary-bridge",
+    "args": [
+      "--readonly"
+    ],
+    "enabled": true,
+    "status": "connected",
+    "installedBy": "preset",
+    "category": "安全与二进制逆向",
+    "summary": "配合 reverse-engineering 技能使用的只读二进制分诊 MCP：封装 file / otool / nm / strings 符号表与动态库探测。",
+    "explanation": "专为低层系统开发与二进制安全分析设计的本地只读 MCP 桥接器。在 macOS/Linux 下自动调用原生 toolchain（otool、nm、strings、shasum）提取二进制 Mach-O/ELF Header、动态链接库依赖与可打印特征字符串，无需授予任意危险写权限即可完成安全逆向初筛。",
+    "tools": [
+      {
+        "name": "inspect_binary_headers",
+        "description": "读取二进制可执行文件或动态库的架构头、SHA256 指纹与动态链接依赖表",
+        "inputExample": "{\"binary_path\": \"/bin/ls\"}"
+      },
+      {
+        "name": "extract_binary_strings",
+        "description": "从目标二进制文件中提取高价值可打印 ASCII/UTF-8 特征字符串",
+        "inputExample": "{\"binary_path\": \"/bin/ls\", \"max_items\": 40}"
+      }
+    ],
+    "usageExamples": [
+      {
+        "title": "分诊系统二进制动态链接与 Mach-O Header",
+        "prompt": "结合 reverse-engineering 技能与 binary-re-bridge-mcp，检查 /bin/ls 的 Mach-O 头部架构与动态链接库依赖。"
+      }
+    ],
+    "lastCheckedAt": 1793592916650
+  },
+  {
+    "id": "filesystem-metrics-mcp",
+    "name": "Workspace Codebase Metrics MCP",
+    "transport": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "."
+    ],
+    "enabled": true,
+    "status": "ready",
+    "installedBy": "preset",
+    "category": "工程度量与文件检索",
+    "summary": "统计项目语言分布、大文件排行与模块耦合度的工作区度量 MCP 服务。",
+    "explanation": "兼容官方 @modelcontextprotocol/server-filesystem 协议，同时内置工作区代码行数（LOC）与目录体量快速统计能力，适合在大型重构或架构评审前快速建立全局量化视图。",
+    "tools": [
+      {
+        "name": "workspace_loc_stats",
+        "description": "统计当前工作区各编程语言文件数量、代码体量与最大模块排行",
+        "inputExample": "{}"
+      }
+    ],
+    "usageExamples": [
+      {
+        "title": "生成当前项目代码体量与模块分布热力报告",
+        "prompt": "调用 filesystem-metrics-mcp 统计当前工作区各后缀文件数量与最大源码模块排行。"
+      }
+    ],
+    "lastCheckedAt": 1793592916650
+  }
+]

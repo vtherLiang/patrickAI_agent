@@ -1,0 +1,31 @@
+---
+name: reverse-engineering
+description: "系统级二进制逆向工程与无符号程序分诊技能（参考 low-level-dev-skills），涵盖 Mach-O/ELF 静态分诊、radare2/Ghidra 控制流恢复与反编译分析。"
+category: security
+source: "https://github.com/mohitmishra786/low-level-dev-skills/tree/main/skills/security/reverse-engineering"
+triggers: ["reverse", "binary", "ghidra", "radare2", "r2", "objdump", "otool", "逆向", "反编译", "反汇编", "二进制", "符号表"]
+---
+
+# Reverse Engineering & Binary Triage
+
+本技能源自 mohitmishra786/low-level-dev-skills 的 security/reverse-engineering 规范，采用渐进式上下文披露（Progressive Disclosure）架构。当对话涉及二进制可执行文件分析、无符号（Stripped）程序分诊、ABI 调用约定还原或安全漏洞定位时自动激活，指导智能体按「文件指纹与段表分诊 → 字符串/导入表交叉引用 → radare2 / objdump / otool 反汇编控制流还原 → Ghidra 伪代码等价重构」四步法系统推进，避免盲目猜测汇编语义。
+
+## Core Capabilities & Methodology
+- Stripped Binary 快速分诊：自动组合 file / otool -hv / readelf -h / nm -nm / strings 提取架构、PIE/NX/Canary 保护位与关键符号
+- macOS Mach-O & Linux ELF 双平台反汇编工作流：支持 otool -tV、llvm-objdump -d --symbolize-operands 与交叉引用追踪
+- radare2 / rizin 命令行自动化脚本：支持 r2 -AA -qc "afl; pdf @ main" 非交互式提取函数列表与 CFG 基本块
+- Ghidra Headless & Binary Ninja 伪代码还原规范：指导结构体内存布局（Struct Offset）、虚表（vtable）与 ABI 寄存器传参推导
+- 安全审计边界：严格区分静态只读分诊与动态调试（lldb/gdb），在沙箱内执行可复现的逆向取证
+
+## Usage Examples
+### 1. 本地可执行二进制安全保护位与符号分诊 (Mach-O / ELF)
+- **Prompt**: `使用 reverse-engineering 技能，对 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron 进行只读二进制头部、动态库依赖 (otool -L) 与安全编译保护位分诊，并输出结构化报告。`
+- **Expected Behavior**: 自动按 Stripped Binary Triage 标准步骤调用 file、otool -hv、otool -L 等只读指令，解析架构信息、动态链接表与签名保护特征。
+
+### 2. 编译一段 C 函数并用 objdump / otool 还原汇编控制流
+- **Prompt**: `请启用逆向工程技能：帮我写一个带 switch 跳转表的小型 C 程序编译为无符号二进制（strip），然后演示如何仅通过反汇编与符号特征还原其原始控制流逻辑。`
+- **Expected Behavior**: 构建最小可复现实验样本，展示从无符号汇编（ARM64/x86_64）推导分支跳转表与还原等价高级语言伪代码的完整方法论。
+
+### 3. Ghidra / radare2 自动化逆向分析脚本生成
+- **Prompt**: `基于 reverse-engineering 技能，为我生成一套针对未知固件/ELF 文件的 radare2 批处理初筛脚本与 Ghidra Python 符号恢复脚本模板。`
+- **Expected Behavior**: 输出可直接运行的 r2 非交互分析命令序列与 Ghidra Headless postScript 脚本，附带关键 API 解释。

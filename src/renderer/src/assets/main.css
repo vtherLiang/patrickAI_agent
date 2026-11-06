@@ -2,7 +2,33 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom subtle scrollbars */
+:root {
+  /* Damped, silky Apple physics without oscillation/jitter */
+  --spring-bounce: cubic-bezier(0.2, 0.9, 0.25, 1);
+  --apple-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --apple-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    overscroll-behavior: none;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    background-color: #ffffff;
+    color: #1d1d1f;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.011em;
+  }
+}
+
+/* Subtle macOS Light-Mode Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -11,11 +37,11 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.2);
+  background: rgba(0, 0, 0, 0.14);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.38);
+  background: rgba(0, 0, 0, 0.26);
 }
 
 .drag-region {
@@ -23,4 +49,503 @@
 }
 .no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* Apple Daylight Frosted Liquid Glass Surfaces */
+.apple-glass {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.9),
+    0 10px 32px -6px rgba(0, 0, 0, 0.08),
+    0 2px 6px -1px rgba(0, 0, 0, 0.04);
+}
+
+/* Apple Light Glass Bubble Capsule Surface (Crisp, High-Legibility Glass Aesthetics with Zero Center Blur) */
+.apple-glass-bubble {
+  position: relative;
+  background: linear-gradient(180deg, #ffffff 0%, #fafafc 100%);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 1),
+    0 6px 18px -4px rgba(0, 0, 0, 0.07),
+    0 1px 3px 0 rgba(0, 0, 0, 0.035);
+}
+
+/* 3D Iridescent Liquid Glass Bubble Icon Orb (玻璃泡泡) */
+.glass-bubble-orb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 28% 24%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.48) 32%, transparent 58%),
+    radial-gradient(circle at 76% 78%, var(--bubble-caustic, rgba(139, 92, 246, 0.36)) 0%, transparent 64%),
+    radial-gradient(circle at 80% 22%, var(--bubble-iridescent, rgba(56, 189, 248, 0.25)) 0%, transparent 55%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.9) 0%, var(--bubble-tint, rgba(237, 233, 254, 0.48)) 56%, rgba(255, 255, 255, 0.74) 100%);
+  backdrop-filter: blur(12px) saturate(190%);
+  -webkit-backdrop-filter: blur(12px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 0 0 1px var(--bubble-ring, rgba(88, 86, 214, 0.22)),
+    inset 0 2px 3.5px 0 rgba(255, 255, 255, 1),
+    inset -2px -3px 6px 0 var(--bubble-caustic, rgba(139, 92, 246, 0.34)),
+    inset 2px 1px 4px 0 rgba(255, 255, 255, 0.88),
+    0 6px 14px -3px var(--bubble-shadow, rgba(88, 86, 214, 0.24)),
+    0 2px 4px -1px rgba(0, 0, 0, 0.05);
+  transition:
+    transform 280ms var(--spring-bounce),
+    box-shadow 260ms var(--apple-ease);
+}
+
+.glass-bubble-orb::before {
+  content: '';
+  position: absolute;
+  top: 3.5px;
+  left: 5px;
+  width: 11px;
+  height: 5px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(255, 255, 255, 0.18) 100%
+  );
+  transform: rotate(-28deg);
+  pointer-events: none;
+}
+
+.glass-bubble-orb::after {
+  content: '';
+  position: absolute;
+  bottom: 4.5px;
+  right: 5.5px;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(255, 255, 255, 0) 75%
+  );
+  pointer-events: none;
+}
+
+.group:hover .glass-bubble-orb {
+  transform: scale(1.07) translateY(-0.5px);
+  box-shadow:
+    0 0 0 1px var(--bubble-ring, rgba(88, 86, 214, 0.28)),
+    inset 0 2px 4px 0 rgba(255, 255, 255, 1),
+    inset -2px -3.5px 7px 0 var(--bubble-caustic, rgba(139, 92, 246, 0.42)),
+    inset 2px 1px 4px 0 rgba(255, 255, 255, 0.92),
+    0 8px 16px -3px var(--bubble-shadow, rgba(88, 86, 214, 0.3)),
+    0 2px 5px -1px rgba(0, 0, 0, 0.06);
+}
+
+.apple-glass-Heavy {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 1),
+    0 24px 60px -12px rgba(0, 0, 0, 0.16),
+    0 4px 16px -2px rgba(0, 0, 0, 0.06);
+}
+
+.apple-bento {
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.075);
+  box-shadow:
+    0 4px 18px -4px rgba(0, 0, 0, 0.045),
+    0 1px 3px 0 rgba(0, 0, 0, 0.02);
+  transition:
+    transform 380ms var(--apple-ease),
+    border-color 280ms var(--apple-ease),
+    background-color 280ms var(--apple-ease),
+    box-shadow 380ms var(--apple-ease);
+}
+
+.apple-bento-interactive:hover {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+  box-shadow:
+    0 10px 24px -6px rgba(0, 0, 0, 0.06),
+    0 2px 6px 0 rgba(0, 0, 0, 0.02);
+}
+
+/* Apple OS Silky Tactile Button Press Physics (Overdamped, Zero Hover Vibration) */
+.apple-press {
+  transition:
+    transform 160ms var(--apple-ease),
+    background-color 150ms var(--apple-ease),
+    border-color 150ms var(--apple-ease),
+    opacity 150ms ease,
+    box-shadow 200ms var(--apple-ease);
+  will-change: transform;
+}
+
+.apple-press:hover {
+  /* Zero vertical translation on hover to eliminate jitter and vibration completely */
+}
+
+.apple-press:active:not(:disabled) {
+  transform: scale(0.985);
+  transition: transform 90ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Sliding Segmented Pill Transition */
+.apple-pill-slider {
+  transition: transform 420ms var(--spring-bounce), width 360ms var(--apple-ease);
+  will-change: transform;
+}
+
+/* Apple iOS / macOS System Settings Toggle Switch (Light Mode) */
+.apple-switch {
+  position: relative;
+  display: inline-flex;
+  height: 22px;
+  width: 38px;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 9999px;
+  background-color: rgba(120, 120, 128, 0.24);
+  padding: 2px;
+  transition: background-color 260ms var(--apple-ease);
+}
+
+.apple-switch[data-checked="true"] {
+  background-color: #34C759;
+}
+
+.apple-switch-thumb {
+  pointer-events: none;
+  display: inline-block;
+  height: 18px;
+  width: 18px;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.18), 0 0 1px rgba(0, 0, 0, 0.08);
+  transform: translateX(0);
+  transition: transform 380ms var(--spring-bounce), width 180ms ease;
+}
+
+.apple-switch[data-checked="true"] .apple-switch-thumb {
+  transform: translateX(16px);
+}
+
+.apple-switch:active .apple-switch-thumb {
+  width: 21px;
+}
+.apple-switch[data-checked="true"]:active .apple-switch-thumb {
+  transform: translateX(13px);
+}
+
+/* Claude Code Signature Shimmer Sweep Animation (for Thinking / Verb Status Line) */
+@keyframes claudeTextShimmer {
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -100% 50%;
+  }
+}
+
+@keyframes claudeGlyphPulse {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 0.92;
+  }
+  50% {
+    transform: scale(1.16) rotate(15deg);
+    opacity: 1;
+  }
+}
+
+.claude-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    #c96442 0%,
+    #c96442 35%,
+    #f59f7c 50%,
+    #c96442 65%,
+    #c96442 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: claudeTextShimmer 2.1s linear infinite;
+}
+
+.claude-glyph-pulse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #d97757;
+  animation: claudeGlyphPulse 1.4s ease-in-out infinite;
+}
+
+/* View & Sheet Entrance Choreography */
+@keyframes appleViewEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes appleModalEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes appleBackdropEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes appleIslandDrop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -18px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+.animate-apple-view {
+  animation: appleViewEnter 360ms var(--apple-ease) both;
+}
+
+.animate-apple-modal {
+  animation: appleModalEnter 400ms var(--spring-bounce) both;
+}
+
+.animate-apple-backdrop {
+  animation: appleBackdropEnter 240ms ease-out both;
+}
+
+.animate-apple-island {
+  animation: appleIslandDrop 440ms var(--spring-bounce) both;
+}
+
+/* Apple.com Light Mode Hero Headline */
+.apple-hero-text {
+  background: linear-gradient(180deg, #1d1d1f 0%, #424245 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.03em;
+}
+
+/* Claude Code CLI Terminal Typography & Structured Output */
+.claude-terminal-output {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  line-height: 1.78;
+  color: #2c2c2e;
+  letter-spacing: -0.011em;
+  word-break: break-word;
+}
+
+.claude-terminal-code {
+  font-family: "SF Mono", "JetBrains Mono", "Menlo", "Monaco", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.62;
+  tab-size: 2;
+}
+
+/* Feishu / Word Document Preview Typesetting */
+.doc-preview-content .doc-h1 {
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.35;
+  margin-top: 24px;
+  margin-bottom: 14px;
+  color: #1f2329;
+}
+
+.doc-preview-content .doc-h2 {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 20px;
+  margin-bottom: 10px;
+  color: #1f2329;
+}
+
+.doc-preview-content .doc-h3 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  color: #1f2329;
+}
+
+.doc-preview-content .doc-p {
+  margin: 10px 0;
+  line-height: 1.78;
+}
+
+.doc-preview-content .doc-ul,
+.doc-preview-content .doc-ol {
+  padding-left: 24px;
+  margin: 10px 0;
+}
+
+.doc-preview-content .doc-ul li,
+.doc-preview-content .doc-ol li {
+  margin: 5px 0;
+  line-height: 1.7;
+}
+
+.doc-preview-content .feishu-table-wrapper {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.doc-preview-content .feishu-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.doc-preview-content .feishu-table th,
+.doc-preview-content .feishu-table td {
+  border: 1px solid #dee0e3;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.doc-preview-content .feishu-table th {
+  background-color: #f5f6f7;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.doc-preview-content .doc-code {
+  background-color: #f2f3f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-size: 12.5px;
+  color: #48484a;
+}
+
+.doc-preview-content .doc-pre {
+  background-color: #f6f7f9;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  overflow-x: auto;
+  font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.62;
+  color: #1f2329;
+}
+
+.doc-preview-content .doc-pre code {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.doc-preview-content .doc-blockquote {
+  border-left: 3px solid #3370ff;
+  padding-left: 14px;
+  color: #646a73;
+  margin: 14px 0;
+  font-style: normal;
+  background-color: #f5f6f7/50;
+}
+
+/* iPhone Silhouette & Glass Display Screen Aesthetics */
+.iphone-chassis {
+  background: linear-gradient(180deg, #e5e5ea 0%, #d1d1d6 50%, #c7c7cc 100%);
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.16),
+    0 8px 24px -4px rgba(0, 0, 0, 0.08),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.9);
+}
+
+.iphone-screen-glass {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(250, 250, 252, 0.94) 50%,
+    rgba(255, 255, 255, 0.97) 100%
+  );
+  backdrop-filter: blur(40px) saturate(190%);
+  -webkit-backdrop-filter: blur(40px) saturate(190%);
+  box-shadow:
+    inset 0 2px 2px 0 rgba(255, 255, 255, 1),
+    inset 0 -1.5px 2px 0 rgba(0, 0, 0, 0.025),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+.iphone-screen-glass::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 15%;
+  right: 15%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.95), transparent);
+  pointer-events: none;
+}
+
+/* Overleaf Code Editor Exact Shared Metrics (Zero Caret Drift Guarantee) */
+.overleaf-code-metrics {
+  font-family: "JetBrains Mono", "SF Mono", "Menlo", "Monaco", "PingFang SC", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 23px;
+  font-weight: 400;
+  font-style: normal;
+  font-variant-ligatures: none;
+  letter-spacing: 0px;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.overleaf-textarea::selection {
+  background-color: rgba(37, 99, 235, 0.18);
+  color: transparent;
+}
+
+/* Authentic iOS WeChat Message Typography */
+.wechat-msg-text {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  font-size: 15.5px;
+  line-height: 1.52;
+  letter-spacing: 0px;
+  color: #111111;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="piPurpleGrad" x1="15%" y1="85%" x2="88%" y2="12%">
+      <stop offset="0%" stop-color="#3811AD" />
+      <stop offset="30%" stop-color="#6D28D9" />
+      <stop offset="58%" stop-color="#8B4BF6" />
+      <stop offset="82%" stop-color="#AF5DFB" />
+      <stop offset="100%" stop-color="#CE86FE" />
+    </linearGradient>
+    <filter id="squircleShadow" x="-10%" y="-8%" width="120%" height="124%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#2E1065" flood-opacity="0.14" />
+    </filter>
+    <filter id="glyphShadow" x="-15%" y="-12%" width="130%" height="132%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#5B21B6" flood-opacity="0.20" />
+    </filter>
+  </defs>
+
+  <!-- Pure White macOS Squircle -->
+  <rect x="100" y="100" width="824" height="824" rx="186" ry="186" fill="#FFFFFF" stroke="#E9E3FC" stroke-width="4.5" filter="url(#squircleShadow)" />
+
+  <!-- Fused π✻ (π* Optimal Agent Policy × Claude Code Sunburst) in Gradient Purple -->
+  <g filter="url(#glyphShadow)">
+    <!-- Sculpted π -->
+    <path d="M 354 402 C 350 548, 322 680, 280 774" fill="none" stroke="url(#piPurpleGrad)" stroke-width="84" stroke-linecap="round" />
+    <path d="M 550 402 C 546 556, 542 682, 550 734 C 558 780, 606 786, 644 752" fill="none" stroke="url(#piPurpleGrad)" stroke-width="84" stroke-linecap="round" />
+    <path d="M 224 430 C 266 386, 344 390, 452 392 C 524 393, 568 391, 598 386" fill="none" stroke="url(#piPurpleGrad)" stroke-width="82" stroke-linecap="round" />
+
+    <!-- Claude Code 10-Spoke Sunburst (✻) Superscript -->
+    <g transform="translate(752, 292)" stroke="url(#piPurpleGrad)" stroke-width="25" stroke-linecap="round">
+      <circle cx="0" cy="0" r="24" fill="url(#piPurpleGrad)" stroke="none" />
+      <line x1="0" y1="0" x2="115" y2="-37" />
+      <line x1="0" y1="0" x2="75" y2="-75" />
+      <line x1="0" y1="0" x2="0" y2="-115" />
+      <line x1="0" y1="0" x2="-75" y2="-75" />
+      <line x1="0" y1="0" x2="-115" y2="-37" />
+      <line x1="0" y1="0" x2="-100" y2="32" />
+      <line x1="0" y1="0" x2="-68" y2="92" />
+      <line x1="0" y1="0" x2="0" y2="102" />
+      <line x1="0" y1="0" x2="68" y2="92" />
+      <line x1="0" y1="0" x2="100" y2="32" />
+    </g>
+  </g>
+</svg>

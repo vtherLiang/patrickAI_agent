@@ -15,19 +15,32 @@ export class CompactPipeline {
 
   estimateTokens(text: string): number {
     if (!text) return 0
-    // Fast hybrid CJK + ASCII heuristic (~3 chars per token on average)
-    return Math.ceil(text.length / 3)
+    // Calibrated CJK + ASCII BPE heuristic matching DeepSeek V3 / Claude / cl100k tokenizers
+    const cjkMatches = text.match(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g)
+    const cjkCount = cjkMatches ? cjkMatches.length : 0
+    const otherCount = Math.max(0, text.length - cjkCount)
+    return Math.ceil(cjkCount * 0.65 + otherCount * 0.25)
   }
 
   calculateStats(messages: ChatMessage[], maxTokens: number): TokenUsageStats {
     let currentTokens = 0
     for (const msg of messages) {
       currentTokens += this.estimateTokens(msg.content)
-      if (msg.reasoningContent) currentTokens += this.estimateTokens(msg.reasoningContent)
+      if (msg.attachments && msg.attachments.length > 0) {
+        for (const att of msg.attachments) {
+          if (att.extractedText) {
+            currentTokens += this.estimateTokens(att.extractedText)
+          }
+          if (att.kind === 'image') {
+            currentTokens += 850 // Standard vision tile budget estimate
+          }
+        }
+      }
+      // Note: Historical `reasoningContent` is NOT re-sent in multi-turn API payloads,
+      // and `tc.resultOutput` is already stored once in the corresponding `role: 'tool'` message.
       if (msg.toolCalls) {
         for (const tc of msg.toolCalls) {
           currentTokens += this.estimateTokens(tc.argumentsJson)
-          if (tc.resultOutput) currentTokens += this.estimateTokens(tc.resultOutput)
         }
       }
     }
@@ -44,13 +57,26 @@ export class CompactPipeline {
   /**
    * Layer 1: MicroCompact
    * Scans older tool messages (more than keepRecentCount from the end) and folds lengthy outputs.
+   * Protects tool outputs generated in the current active user turn so critical facts remain intact!
    */
-  runMicroCompact(messages: ChatMessage[], keepRecentCount = 6): ChatMessage[] {
+  runMicroCompact(messages: ChatMessage[], keepRecentCount = 8): ChatMessage[] {
     if (messages.length <= keepRecentCount) return messages
+
+    // Find the latest user message index to strictly protect current turn's tool outputs
+    let lastUserIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUserIdx = i
+        break
+      }
+    }
 
     const cutoffIndex = messages.length - keepRecentCount
     return messages.map((msg, idx) => {
+      // 1. Keep recent messages within keepRecentCount
       if (idx >= cutoffIndex) return msg
+      // 2. Strict protection: never fold tool outputs produced in the active user inquiry turn!
+      if (lastUserIdx !== -1 && idx >= lastUserIdx) return msg
 
       if (msg.role === 'tool' && msg.content.length > 700 && !msg.isCompactedSummary) {
         const beforeTokens = this.estimateTokens(msg.content)

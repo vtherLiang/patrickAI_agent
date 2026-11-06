@@ -9,6 +9,14 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit"
   },
+  "build": {
+    "appId": "com.claudecode.studio",
+    "productName": "Claude Code Studio",
+    "mac": {
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.developer-tools"
+    }
+  },
   "dependencies": {
     "lucide-react": "^0.460.0",
     "zustand": "^5.0.1"

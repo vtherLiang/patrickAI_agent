@@ -1,5 +1,18 @@
 node_modules/
 out/
 dist/
-.claude-desktop/worktrees/
 .DS_Store
+
+# Worktrees & Runtime Local Config
+.claude-desktop/worktrees/
+.claude-desktop/config.json
+
+# Credentials & Sensitive Settings
+.env
+.env.*
+*.env
+*.local
+settings.json
+.claude/settings.json
+*.key
+*.pem
