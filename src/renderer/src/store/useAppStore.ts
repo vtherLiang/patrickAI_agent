@@ -547,6 +547,8 @@ interface AppState {
   isQuickLauncherOpen: boolean
   isInspectorOpen: boolean
   inspectorTab: InspectorTab
+  previewTabs: BrowserPreviewItem[]
+  activePreviewId: string | null
   activePreview: BrowserPreviewItem | null
   inspectorWidth: number
   isInspectorExpanded: boolean
@@ -572,6 +574,11 @@ interface AppState {
   setInspectorTab: (tab: InspectorTab) => void
   openPreview: (item: BrowserPreviewItem) => void
   closePreview: () => void
+  closePreviewTab: (tabId: string) => void
+  setActivePreviewTab: (tabId: string) => void
+  createNewWebTab: (initialUrl?: string) => void
+  updatePreviewTab: (tabId: string, partial: Partial<BrowserPreviewItem>) => void
+  closeAllPreviewTabs: () => void
   openWebPreview: (url: string, title?: string) => void
   openAttachmentPreview: (att: ChatAttachment) => Promise<void>
   openFileInBrowserPreview: (filePath: string) => Promise<void>
@@ -760,6 +767,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   isQuickLauncherOpen: false,
   isInspectorOpen: true,
   inspectorTab: 'files',
+  previewTabs: [],
+  activePreviewId: null,
   activePreview: null,
   inspectorWidth: 360,
   isInspectorExpanded: false,
@@ -804,12 +813,118 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleInspector: () => set((s) => ({ isInspectorOpen: !s.isInspectorOpen })),
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
   openPreview: (item) =>
-    set({
-      isInspectorOpen: true,
-      inspectorTab: 'preview',
-      activePreview: item
+    set((s) => {
+      const existing = s.previewTabs.find(
+        (t) =>
+          t.id === item.id ||
+          (item.filePath && t.filePath === item.filePath) ||
+          (item.url && t.url === item.url)
+      )
+      if (existing) {
+        return {
+          isInspectorOpen: true,
+          inspectorTab: 'preview',
+          activePreviewId: existing.id,
+          activePreview: existing
+        }
+      }
+      const nextTabs = [...s.previewTabs, item]
+      return {
+        isInspectorOpen: true,
+        inspectorTab: 'preview',
+        previewTabs: nextTabs,
+        activePreviewId: item.id,
+        activePreview: item
+      }
     }),
-  closePreview: () => set({ activePreview: null }),
+  closePreview: () =>
+    set((s) => {
+      if (s.activePreviewId) {
+        const idx = s.previewTabs.findIndex((t) => t.id === s.activePreviewId)
+        const nextTabs = s.previewTabs.filter((t) => t.id !== s.activePreviewId)
+        if (nextTabs.length === 0) {
+          return { previewTabs: [], activePreviewId: null, activePreview: null }
+        }
+        const nextIdx = Math.min(idx >= 0 ? idx : 0, nextTabs.length - 1)
+        const nextActive = nextTabs[nextIdx]
+        return { previewTabs: nextTabs, activePreviewId: nextActive.id, activePreview: nextActive }
+      }
+      return { previewTabs: [], activePreviewId: null, activePreview: null }
+    }),
+  closePreviewTab: (tabId) =>
+    set((s) => {
+      const idx = s.previewTabs.findIndex((t) => t.id === tabId)
+      if (idx === -1) return s
+      const nextTabs = s.previewTabs.filter((t) => t.id !== tabId)
+      if (nextTabs.length === 0) {
+        return { previewTabs: [], activePreviewId: null, activePreview: null }
+      }
+      if (s.activePreviewId === tabId) {
+        const nextIdx = Math.min(idx, nextTabs.length - 1)
+        const nextActive = nextTabs[nextIdx]
+        return {
+          previewTabs: nextTabs,
+          activePreviewId: nextActive.id,
+          activePreview: nextActive
+        }
+      }
+      return { previewTabs: nextTabs }
+    }),
+  setActivePreviewTab: (tabId) =>
+    set((s) => {
+      const found = s.previewTabs.find((t) => t.id === tabId)
+      if (found) {
+        return {
+          isInspectorOpen: true,
+          inspectorTab: 'preview',
+          activePreviewId: found.id,
+          activePreview: found
+        }
+      }
+      return s
+    }),
+  createNewWebTab: (initialUrl) =>
+    set((s) => {
+      const url = (initialUrl || '').trim()
+      const newTab: BrowserPreviewItem = {
+        id: `web_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'web',
+        title: url ? url.replace(/^https?:\/\//, '') : '新标签页',
+        url: url || undefined,
+        meta: '网页实时交互'
+      }
+      return {
+        isInspectorOpen: true,
+        inspectorTab: 'preview',
+        previewTabs: [...s.previewTabs, newTab],
+        activePreviewId: newTab.id,
+        activePreview: newTab
+      }
+    }),
+  updatePreviewTab: (tabId, partial) =>
+    set((s) => {
+      let updatedActive = s.activePreview
+      const nextTabs = s.previewTabs.map((t) => {
+        if (t.id === tabId) {
+          const updated = { ...t, ...partial }
+          if (s.activePreviewId === tabId) {
+            updatedActive = updated
+          }
+          return updated
+        }
+        return t
+      })
+      return {
+        previewTabs: nextTabs,
+        activePreview: updatedActive
+      }
+    }),
+  closeAllPreviewTabs: () =>
+    set({
+      previewTabs: [],
+      activePreviewId: null,
+      activePreview: null
+    }),
   openWebPreview: (url, title) => {
     let cleanUrl = (url || '').trim()
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('file://')) {
@@ -824,15 +939,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       cleanUrl = `https://${cleanUrl}`
     }
-    set({
-      isInspectorOpen: true,
-      inspectorTab: 'preview',
-      activePreview: {
-        id: `web_${Date.now()}`,
+    set((s) => {
+      const existing = s.previewTabs.find((t) => t.type === 'web' && t.url === cleanUrl)
+      if (existing) {
+        return {
+          isInspectorOpen: true,
+          inspectorTab: 'preview',
+          activePreviewId: existing.id,
+          activePreview: existing
+        }
+      }
+      const newTab: BrowserPreviewItem = {
+        id: `web_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         type: 'web',
-        title: title || cleanUrl,
+        title: title || cleanUrl.replace(/^https?:\/\//, ''),
         url: cleanUrl,
         meta: '网页实时交互'
+      }
+      return {
+        isInspectorOpen: true,
+        inspectorTab: 'preview',
+        previewTabs: [...s.previewTabs, newTab],
+        activePreviewId: newTab.id,
+        activePreview: newTab
       }
     })
   },
@@ -877,10 +1006,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    set({
-      isInspectorOpen: true,
-      inspectorTab: 'preview',
-      activePreview: {
+    set((s) => {
+      const existing = s.previewTabs.find(
+        (t) => t.id === `att_${att.id}` || (att.filePath && t.filePath === att.filePath)
+      )
+      if (existing) {
+        return {
+          isInspectorOpen: true,
+          inspectorTab: 'preview',
+          activePreviewId: existing.id,
+          activePreview: existing
+        }
+      }
+      const newTab: BrowserPreviewItem = {
         id: `att_${att.id}`,
         type,
         title: att.name,
@@ -892,6 +1030,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawText: att.extractedText,
         meta: att.summaryMeta || `${att.ext} · ${(att.sizeBytes / 1024).toFixed(1)} KB`,
         attachment: att
+      }
+      return {
+        isInspectorOpen: true,
+        inspectorTab: 'preview',
+        previewTabs: [...s.previewTabs, newTab],
+        activePreviewId: newTab.id,
+        activePreview: newTab
       }
     })
   },
@@ -940,11 +1085,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       type = 'web'
     }
 
-    set({
-      isInspectorOpen: true,
-      inspectorTab: 'preview',
-      activePreview: {
-        id: `file_${Date.now()}`,
+    set((s) => {
+      const existing = s.previewTabs.find((t) => t.filePath === filePath)
+      if (existing) {
+        return {
+          isInspectorOpen: true,
+          inspectorTab: 'preview',
+          activePreviewId: existing.id,
+          activePreview: existing
+        }
+      }
+      const newTab: BrowserPreviewItem = {
+        id: `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         type,
         title: name,
         fileName: name,
@@ -954,6 +1106,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         htmlContent,
         excelData,
         meta: `${ext.toUpperCase()} 文件`
+      }
+      return {
+        isInspectorOpen: true,
+        inspectorTab: 'preview',
+        previewTabs: [...s.previewTabs, newTab],
+        activePreviewId: newTab.id,
+        activePreview: newTab
       }
     })
   },

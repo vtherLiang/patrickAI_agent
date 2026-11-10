@@ -484,40 +484,93 @@ export const CodexSideChatDrawer: React.FC = () => {
                         <div className="whitespace-pre-wrap">
                           {(() => {
                             const linkRegex =
-                              /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>'")]+)/g
+                              /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`https?:\/\/[^`\n]+`|`www\.[^`\n]+`|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?)/g
                             const chunks = msg.content.split(linkRegex)
+                            const stripTrailing = (raw: string) => {
+                              const trailMatch = raw.match(/[。，、；：！？）】》”’」』\.\,\;\:\!\?\)]+$/)
+                              if (trailMatch) {
+                                return { clean: raw.slice(0, -trailMatch[0].length), trail: trailMatch[0] }
+                              }
+                              return { clean: raw, trail: '' }
+                            }
                             return chunks.map((chunk, cIdx) => {
                               if (chunk.startsWith('[') && chunk.includes('](')) {
                                 const splitIdx = chunk.indexOf('](')
                                 const label = chunk.slice(1, splitIdx)
-                                const url = chunk.slice(splitIdx + 2, -1)
+                                const { clean: url, trail } = stripTrailing(chunk.slice(splitIdx + 2, -1))
                                 return (
-                                  <a
-                                    key={cIdx}
-                                    href={url}
-                                    onClick={(e) => {
-                                      e.preventDefault()
-                                      useAppStore.getState().openWebPreview(url, label)
-                                    }}
-                                    className="text-[#0071e3] hover:text-[#005bb5] underline font-medium cursor-pointer"
-                                  >
-                                    {label}
-                                  </a>
+                                  <React.Fragment key={cIdx}>
+                                    <a
+                                      href={url}
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        useAppStore.getState().openWebPreview(url, label)
+                                      }}
+                                      className="text-[#0071e3] hover:text-[#005bb5] underline font-medium cursor-pointer"
+                                    >
+                                      {label}
+                                    </a>
+                                    {trail}
+                                  </React.Fragment>
                                 )
                               }
+                              if (chunk.startsWith('`') && chunk.endsWith('`')) {
+                                const codeInner = chunk.slice(1, -1).trim()
+                                if (/^https?:\/\/\S+$/i.test(codeInner) || /^www\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+(\/\S*)?$/i.test(codeInner)) {
+                                  const { clean: target, trail } = stripTrailing(codeInner)
+                                  const finalUrl = target.startsWith('www.') ? `https://${target}` : target
+                                  return (
+                                    <React.Fragment key={cIdx}>
+                                      <a
+                                        href={finalUrl}
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          useAppStore.getState().openWebPreview(finalUrl)
+                                        }}
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-[2px] rounded-[5px] text-[12px] font-mono font-medium bg-[#0071e3]/10 border border-[#0071e3]/25 text-[#0071e3] hover:text-[#005bb5] hover:bg-[#0071e3]/15 underline cursor-pointer break-all"
+                                      >
+                                        {codeInner}
+                                      </a>
+                                      {trail}
+                                    </React.Fragment>
+                                  )
+                                }
+                              }
                               if (chunk.startsWith('http://') || chunk.startsWith('https://')) {
+                                const { clean: url, trail } = stripTrailing(chunk)
                                 return (
-                                  <a
-                                    key={cIdx}
-                                    href={chunk}
-                                    onClick={(e) => {
-                                      e.preventDefault()
-                                      useAppStore.getState().openWebPreview(chunk)
-                                    }}
-                                    className="text-[#0071e3] hover:text-[#005bb5] underline font-medium cursor-pointer break-all"
-                                  >
-                                    {chunk}
-                                  </a>
+                                  <React.Fragment key={cIdx}>
+                                    <a
+                                      href={url}
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        useAppStore.getState().openWebPreview(url)
+                                      }}
+                                      className="text-[#0071e3] hover:text-[#005bb5] underline font-medium cursor-pointer break-all"
+                                    >
+                                      {url}
+                                    </a>
+                                    {trail}
+                                  </React.Fragment>
+                                )
+                              }
+                              if (chunk.startsWith('www.')) {
+                                const { clean: url, trail } = stripTrailing(chunk)
+                                const finalUrl = `https://${url}`
+                                return (
+                                  <React.Fragment key={cIdx}>
+                                    <a
+                                      href={finalUrl}
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        useAppStore.getState().openWebPreview(finalUrl)
+                                      }}
+                                      className="text-[#0071e3] hover:text-[#005bb5] underline font-medium cursor-pointer break-all"
+                                    >
+                                      {url}
+                                    </a>
+                                    {trail}
+                                  </React.Fragment>
                                 )
                               }
                               return chunk

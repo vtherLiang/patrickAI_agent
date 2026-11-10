@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { ChevronRight, Sparkles, Copy, Check } from 'lucide-react'
+import { ChevronRight, Sparkles, Copy, Check, ExternalLink } from 'lucide-react'
 import { MemoryLayer, RecalledMemoryItem, ToolCallItem } from '@shared/types'
 import { maskSensitiveSecrets } from '@shared/secretMasker'
 import { useAppStore } from '../store/useAppStore'
@@ -748,12 +748,235 @@ function detectCodeBubbleRisk(code: string, contextLine: string): boolean {
 }
 
 /**
+ * Strips common sentence-ending punctuation (including Chinese full stops, commas, quotes, brackets)
+ * so URLs like `https://example.com。` don't break when clicked.
+ */
+function cleanUrlAndTrailing(raw: string): { url: string; trailing: string } {
+  let url = raw
+  let trailing = ''
+  const trailMatch = url.match(/[。，、；：！？）】》”’」』\.\,\;\:\!\?\)]+$/)
+  if (trailMatch) {
+    trailing = trailMatch[0]
+    url = url.slice(0, -trailing.length)
+  }
+  return { url, trailing }
+}
+
+/**
+ * Detects whether a string represents a local filesystem path, code snippet, or local document
+ * (e.g. `/tmp/slicing_clean.txt`, `src/index.ts`, `data.csv`), which must NOT be treated as web hyperlinks.
+ */
+function isLikelyLocalFilePath(raw: string): boolean {
+  const str = raw.trim()
+  // 1. Starts with common Unix/macOS or Windows filesystem roots or relative directories
+  if (
+    /^(\/(?:tmp|Users|var|etc|opt|usr|bin|sbin|home|private|root|System|Library|Volumes|Applications)|\.\/|\.\.\/|~\/|[a-zA-Z]:[/\\])/i.test(
+      str
+    )
+  ) {
+    return true
+  }
+  // 2. Contains local file extensions and does NOT have web protocols
+  if (!/^https?:\/\//i.test(str) && !/^www\./i.test(str)) {
+    if (
+      /\.(?:txt|log|py|ts|tsx|js|jsx|json|yaml|yml|toml|ini|csv|tsv|md|markdown|c|cpp|h|hpp|rs|go|java|kt|swift|sh|bash|zsh|sql|dockerfile|lock|env)$/i.test(
+        str
+      )
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Helper to collect all valid HTTP/HTTPS URLs from the current response content
+ * and from recent session messages in useAppStore.
+ */
+function getAllKnownUrls(contextText?: string): string[] {
+  const urlSet = new Set<string>()
+
+  const scanText = (txt: string): void => {
+    if (!txt) return
+    const matches = txt.match(/https?:\/\/[^\s<>'")`]+/g)
+    if (matches) {
+      for (const m of matches) {
+        const { url } = cleanUrlAndTrailing(m)
+        if (url) urlSet.add(url)
+      }
+    }
+  }
+
+  // 1. Current response content
+  if (contextText) {
+    scanText(contextText)
+  }
+
+  // 2. URLs from recent conversation messages
+  try {
+    const recentMessages = useAppStore.getState().messages || []
+    for (const msg of recentMessages.slice(-15)) {
+      if (typeof msg.content === 'string') {
+        scanText(msg.content)
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return Array.from(urlSet)
+}
+
+/**
+ * Checks if a string inside inline code is actually a pure URL, markdown link,
+ * or relative URL/path that references a known URL in the context.
+ */
+function extractUrlIfPureLink(
+  rawStr: string,
+  currentLineText?: string,
+  contextFullText?: string
+): { targetUrl: string; displayLabel: string } | null {
+  let str = rawStr.trim()
+  if (str.startsWith('<') && str.endsWith('>')) {
+    str = str.slice(1, -1).trim()
+  }
+
+  // Local filesystem path guard: NEVER convert local files like /tmp/... or code files into web links
+  if (isLikelyLocalFilePath(str)) {
+    return null
+  }
+
+  // 1. Check markdown link format: [label](url)
+  const mdMatch = str.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/)
+  if (mdMatch) {
+    const { url } = cleanUrlAndTrailing(mdMatch[2])
+    return {
+      targetUrl: url,
+      displayLabel: mdMatch[1]
+    }
+  }
+
+  // 2. Check full http/https URLs
+  if (/^https?:\/\/\S+$/i.test(str)) {
+    const { url } = cleanUrlAndTrailing(str)
+    return {
+      targetUrl: url,
+      displayLabel: str
+    }
+  }
+
+  // 3. Check bare domain / apex domain: `www.bjaa.com.cn` or `bjaa.com.cn/exhibit.html`
+  const domainPattern =
+    /^(?:www\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*(?:\.(?:com|cn|org|net|gov|edu|io|co|me|cc|top|xyz|ai|app|dev|info|vip|online|site))(?:\/[^\s<>'"]*)?$/i
+  if (domainPattern.test(str)) {
+    const { url } = cleanUrlAndTrailing(str)
+    const finalUrl = url.startsWith('http') ? url : `https://${url}`
+    return {
+      targetUrl: finalUrl,
+      displayLabel: str
+    }
+  }
+
+  // 4. Check relative path / filename / query string ONLY IF it looks like a web resource
+  // e.g. `exhibit.html?hcs=11&clg=152`, `/shows.html`, `index.php?id=1`
+  const isWebResource =
+    /\.(?:html?|php|jsp|asp|aspx|shtml)(?:\?[^\s<>'"]*)?$/i.test(str) ||
+    /^[a-zA-Z0-9_.-]+\?[a-zA-Z0-9_.-]+=/.test(str)
+
+  if (!isWebResource) {
+    return null
+  }
+
+  const knownUrls = getAllKnownUrls(contextFullText)
+  const cleanStr = str.replace(/^\//, '')
+
+  // 4a. Direct match: does any known URL end with or contain this exact web path?
+  const directMatch = knownUrls.find((u) => {
+    try {
+      const parsed = new URL(u)
+      const pathnameAndSearch = (parsed.pathname + parsed.search).replace(/^\//, '')
+      return (
+        pathnameAndSearch === cleanStr ||
+        pathnameAndSearch.endsWith(cleanStr) ||
+        u.endsWith(cleanStr)
+      )
+    } catch {
+      return u.endsWith(cleanStr)
+    }
+  })
+
+  if (directMatch) {
+    return {
+      targetUrl: directMatch,
+      displayLabel: str
+    }
+  }
+
+  // 4b. Contextual line keyword match:
+  // e.g. Current line mentions "北京画院" or "北京画院美术馆",
+  // and in the full context or messages, a known URL appeared in the same line or row mentioning "北京画院"!
+  if (currentLineText && (contextFullText || knownUrls.length > 0)) {
+    const allTextToSearch = [contextFullText || '']
+    try {
+      const recentMessages = useAppStore.getState().messages || []
+      for (const msg of recentMessages.slice(-10)) {
+        if (typeof msg.content === 'string') allTextToSearch.push(msg.content)
+      }
+    } catch {
+      // ignore
+    }
+
+    const lines = allTextToSearch.join('\n').split('\n')
+    // Extract entity keywords (e.g. "北京画院", "武英殿", etc.)
+    const keywords = (currentLineText.match(/[\u4e00-\u9fa5]{2,}|[a-zA-Z0-9]{3,}/g) || []).filter(
+      (k) =>
+        ![
+          '上面',
+          '面的',
+          '官方',
+          '链接',
+          '美术馆',
+          '博览',
+          '网址',
+          '点击',
+          '可以',
+          '这个',
+          '说明',
+          '文本',
+          '清洗',
+          '全文',
+          '留在',
+          '问题',
+          '参数',
+          '数据'
+        ].includes(k)
+    )
+
+    for (const kw of keywords) {
+      for (const line of lines) {
+        if (line !== currentLineText && line.includes(kw)) {
+          const matchedInLine = knownUrls.find((u) => line.includes(u))
+          if (matchedInLine) {
+            return {
+              targetUrl: matchedInLine,
+              displayLabel: str
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+/**
  * Inline token parser for Claude Code Terminal Output (`code`, **bold**, *italic*, [link](url), raw URLs)
  */
-function renderInlineTerminalText(text: string): React.ReactNode[] {
+function renderInlineTerminalText(text: string, contextFullText?: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   const tokenRegex =
-    /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>'")]+|\*[^*\s][^*\n]*\*)/g
+    /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?|\b[a-zA-Z0-9_.-]+\.(?:html?|php|jsp|asp|aspx)(?:\?[^\s<>'")]+)?|\*[^*\s][^*\n]*\*)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
   let keySeq = 0
@@ -765,20 +988,40 @@ function renderInlineTerminalText(text: string): React.ReactNode[] {
     const raw = match[0]
     if (raw.startsWith('`') && raw.endsWith('`')) {
       const codeContent = raw.slice(1, -1)
-      const isRisk = detectCodeBubbleRisk(codeContent, text)
+      const linkInfo = extractUrlIfPureLink(codeContent, text, contextFullText)
 
-      nodes.push(
-        <code
-          key={`ic_${keySeq++}`}
-          className={`px-1.5 py-0.5 mx-[2px] rounded-[5px] text-[12.5px] font-mono transition-colors ${
-            isRisk
-              ? 'bg-[#FF3B30]/10 border border-[#FF3B30]/30 text-[#D70015] font-semibold'
-              : 'bg-[#F2F2F7] border border-black/[0.08] text-[#48484a] font-medium'
-          }`}
-        >
-          {codeContent}
-        </code>
-      )
+      if (linkInfo) {
+        nodes.push(
+          <a
+            key={`ic_url_${keySeq++}`}
+            href={linkInfo.targetUrl}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              useAppStore.getState().openWebPreview(linkInfo.targetUrl, linkInfo.displayLabel)
+            }}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 mx-[2px] rounded-[6px] text-[12px] font-mono font-medium bg-[#0071e3]/10 border border-[#0071e3]/25 text-[#0071e3] hover:text-[#005bb5] hover:bg-[#0071e3]/15 hover:border-[#0071e3]/40 underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] cursor-pointer transition-all break-all select-text group/url-code shadow-xs"
+            title={`在侧边浏览区交互打开: ${linkInfo.targetUrl}`}
+          >
+            <span>{linkInfo.displayLabel}</span>
+            <ExternalLink className="w-3 h-3 inline-block shrink-0 opacity-70 group-hover/url-code:opacity-100 group-hover/url-code:translate-x-0.5 transition-transform" />
+          </a>
+        )
+      } else {
+        const isRisk = detectCodeBubbleRisk(codeContent, text)
+        nodes.push(
+          <code
+            key={`ic_${keySeq++}`}
+            className={`px-1.5 py-0.5 mx-[2px] rounded-[5px] text-[12.5px] font-mono transition-colors ${
+              isRisk
+                ? 'bg-[#FF3B30]/10 border border-[#FF3B30]/30 text-[#D70015] font-semibold'
+                : 'bg-[#F2F2F7] border border-black/[0.08] text-[#48484a] font-medium'
+            }`}
+          >
+            {codeContent}
+          </code>
+        )
+      }
     } else if (raw.startsWith('**') && raw.endsWith('**')) {
       nodes.push(
         <strong key={`b_${keySeq++}`} className="font-bold text-[#000000]">
@@ -788,7 +1031,8 @@ function renderInlineTerminalText(text: string): React.ReactNode[] {
     } else if (raw.startsWith('[') && raw.includes('](')) {
       const splitIdx = raw.indexOf('](')
       const label = raw.slice(1, splitIdx)
-      const url = raw.slice(splitIdx + 2, -1)
+      const rawUrl = raw.slice(splitIdx + 2, -1)
+      const { url, trailing } = cleanUrlAndTrailing(rawUrl)
       nodes.push(
         <a
           key={`a_${keySeq++}`}
@@ -798,14 +1042,40 @@ function renderInlineTerminalText(text: string): React.ReactNode[] {
             e.stopPropagation()
             useAppStore.getState().openWebPreview(url, label)
           }}
-          className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors"
+          className="inline-flex items-center gap-1 text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors group/md-link"
           title={`在侧边浏览区交互打开: ${url}`}
         >
-          {label}
+          <span>{label}</span>
+          <ExternalLink className="w-3 h-3 inline-block shrink-0 opacity-70 group-hover/md-link:opacity-100 group-hover/md-link:translate-x-0.5 transition-transform" />
         </a>
       )
+      if (trailing) {
+        nodes.push(trailing)
+      }
+    } else if (raw.startsWith('<http') && raw.endsWith('>')) {
+      const inner = raw.slice(1, -1).trim()
+      const { url, trailing } = cleanUrlAndTrailing(inner)
+      nodes.push(
+        <a
+          key={`angle_url_${keySeq++}`}
+          href={url}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            useAppStore.getState().openWebPreview(url)
+          }}
+          className="inline-flex items-center gap-1 text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all group/angle-url"
+          title={`在侧边浏览区交互打开: ${url}`}
+        >
+          <span>{url}</span>
+          <ExternalLink className="w-3 h-3 inline-block shrink-0 opacity-70 group-hover/angle-url:opacity-100 group-hover/angle-url:translate-x-0.5 transition-transform" />
+        </a>
+      )
+      if (trailing) {
+        nodes.push(trailing)
+      }
     } else if (raw.startsWith('http://') || raw.startsWith('https://')) {
-      const url = raw
+      const { url, trailing } = cleanUrlAndTrailing(raw)
       nodes.push(
         <a
           key={`url_${keySeq++}`}
@@ -815,12 +1085,60 @@ function renderInlineTerminalText(text: string): React.ReactNode[] {
             e.stopPropagation()
             useAppStore.getState().openWebPreview(url)
           }}
-          className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all"
+          className="inline-flex items-center gap-1 text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all group/bare-url"
           title={`在侧边浏览区交互打开: ${url}`}
         >
-          {url}
+          <span>{url}</span>
+          <ExternalLink className="w-3 h-3 inline-block shrink-0 opacity-70 group-hover/bare-url:opacity-100 group-hover/bare-url:translate-x-0.5 transition-transform" />
         </a>
       )
+      if (trailing) {
+        nodes.push(trailing)
+      }
+    } else if (raw.startsWith('www.')) {
+      const { url, trailing } = cleanUrlAndTrailing(raw)
+      const fullUrl = `https://${url}`
+      nodes.push(
+        <a
+          key={`www_url_${keySeq++}`}
+          href={fullUrl}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            useAppStore.getState().openWebPreview(fullUrl)
+          }}
+          className="inline-flex items-center gap-1 text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all group/www-url"
+          title={`在侧边浏览区交互打开: ${fullUrl}`}
+        >
+          <span>{url}</span>
+          <ExternalLink className="w-3 h-3 inline-block shrink-0 opacity-70 group-hover/www-url:opacity-100 group-hover/www-url:translate-x-0.5 transition-transform" />
+        </a>
+      )
+      if (trailing) {
+        nodes.push(trailing)
+      }
+    } else if (/\.(?:html?|php|jsp|asp|aspx)(?:\?[^\s<>'")]+)?$/i.test(raw)) {
+      const linkInfo = extractUrlIfPureLink(raw, text, contextFullText)
+      if (linkInfo) {
+        nodes.push(
+          <a
+            key={`path_url_${keySeq++}`}
+            href={linkInfo.targetUrl}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              useAppStore.getState().openWebPreview(linkInfo.targetUrl, linkInfo.displayLabel)
+            }}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 mx-[2px] rounded-[6px] text-[12px] font-mono font-medium bg-[#0071e3]/10 border border-[#0071e3]/25 text-[#0071e3] hover:text-[#005bb5] hover:bg-[#0071e3]/15 hover:border-[#0071e3]/40 underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] cursor-pointer transition-all break-all select-text group/url-path shadow-xs"
+            title={`在侧边浏览区交互打开: ${linkInfo.targetUrl}`}
+          >
+            <span>{linkInfo.displayLabel}</span>
+            <ExternalLink className="w-3 h-3 inline-block shrink-0 opacity-70 group-hover/url-path:opacity-100 group-hover/url-path:translate-x-0.5 transition-transform" />
+          </a>
+        )
+      } else {
+        nodes.push(raw)
+      }
     } else if (raw.startsWith('*') && raw.endsWith('*')) {
       nodes.push(
         <em key={`em_${keySeq++}`} className="italic text-[#3a3a3c]">
@@ -949,7 +1267,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
                         key={hIdx}
                         className="px-4 py-2.5 font-semibold text-[#1d1d1f] text-[12px] tracking-wide"
                       >
-                        {renderInlineTerminalText(h)}
+                        {renderInlineTerminalText(h, content)}
                       </th>
                     ))}
                   </tr>
@@ -959,7 +1277,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
                     <tr key={rIdx} className="bg-white hover:bg-[#FBFBFD] transition-colors">
                       {row.map((cell, cIdx) => (
                         <td key={cIdx} className="px-4 py-2.5 text-[#2c2c2e]">
-                          {renderInlineTerminalText(cell)}
+                          {renderInlineTerminalText(cell, content)}
                         </td>
                       ))}
                     </tr>
@@ -986,7 +1304,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
         blocks.push(
           <div key={`h_${segIdx}_${i}`} className={cls}>
             {level === 2 && <span className="text-[#0071e3] text-[12px] select-none">▍</span>}
-            <span>{renderInlineTerminalText(headingText)}</span>
+            <span>{renderInlineTerminalText(headingText, content)}</span>
           </div>
         )
         i++
@@ -1006,7 +1324,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
             className="my-3.5 pl-4 py-2 border-l-3 border-[#D97757] bg-[#F5F5F7]/70 rounded-r-xl text-[#3a3a3c] text-[13.5px] space-y-1 font-sans"
           >
             {quoteLines.map((ql, qIdx) => (
-              <div key={qIdx}>{renderInlineTerminalText(ql)}</div>
+              <div key={qIdx}>{renderInlineTerminalText(ql, content)}</div>
             ))}
           </blockquote>
         )
@@ -1077,7 +1395,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
                 <span className="text-[#86868b] font-mono select-none shrink-0 min-w-[16px] text-[13px] mt-0.5">
                   {it.marker}
                 </span>
-                <div className="flex-1 min-w-0">{renderInlineTerminalText(it.body)}</div>
+                <div className="flex-1 min-w-0">{renderInlineTerminalText(it.body, content)}</div>
               </div>
             ))}
           </div>
@@ -1115,7 +1433,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
           {paraLines.map((pl, pIdx) => (
             <React.Fragment key={pIdx}>
               {pIdx > 0 && '\n'}
-              {renderInlineTerminalText(pl)}
+              {renderInlineTerminalText(pl, content)}
             </React.Fragment>
           ))}
         </p>

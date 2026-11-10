@@ -741,46 +741,108 @@ export const WorkbenchView: React.FC = () => {
   const renderMessageContentWithSkillMentions = (content: string) => {
     if (!content) return content
 
-    // Tokenize for links (both [title](url) and bare https?://...)
-    const linkRegex = /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>'")]+)/g
+    // Tokenize for links (both [title](url), `code-wrapped url`, bare https?://..., www...)
+    const linkRegex =
+      /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`https?:\/\/[^`\n]+`|`www\.[^`\n]+`|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?)/g
     const chunks = content.split(linkRegex)
+
+    const stripTrailing = (raw: string) => {
+      const trailMatch = raw.match(/[。，、；：！？）】》”’」』\.\,\;\:\!\?\)]+$/)
+      if (trailMatch) {
+        return { clean: raw.slice(0, -trailMatch[0].length), trail: trailMatch[0] }
+      }
+      return { clean: raw, trail: '' }
+    }
 
     return chunks.map((chunk, chunkIdx) => {
       if (chunk.startsWith('[') && chunk.includes('](')) {
         const splitIdx = chunk.indexOf('](')
         const label = chunk.slice(1, splitIdx)
-        const url = chunk.slice(splitIdx + 2, -1)
+        const { clean: url, trail } = stripTrailing(chunk.slice(splitIdx + 2, -1))
         return (
-          <a
-            key={`mdl_${chunkIdx}`}
-            href={url}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              openWebPreview(url, label)
-            }}
-            className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors"
-            title={`在侧边浏览区交互打开: ${url}`}
-          >
-            {label}
-          </a>
+          <React.Fragment key={`mdl_${chunkIdx}`}>
+            <a
+              href={url}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                openWebPreview(url, label)
+              }}
+              className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors"
+              title={`在侧边浏览区交互打开: ${url}`}
+            >
+              {label}
+            </a>
+            {trail}
+          </React.Fragment>
         )
       }
+
+      if (chunk.startsWith('`') && chunk.endsWith('`')) {
+        const codeInner = chunk.slice(1, -1).trim()
+        if (/^https?:\/\/\S+$/i.test(codeInner) || /^www\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+(\/\S*)?$/i.test(codeInner)) {
+          const { clean: target, trail } = stripTrailing(codeInner)
+          const finalUrl = target.startsWith('www.') ? `https://${target}` : target
+          return (
+            <React.Fragment key={`cdl_${chunkIdx}`}>
+              <a
+                href={finalUrl}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  openWebPreview(finalUrl)
+                }}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-[2px] rounded-[5px] text-[12px] font-mono font-medium bg-[#0071e3]/10 border border-[#0071e3]/25 text-[#0071e3] hover:text-[#005bb5] hover:bg-[#0071e3]/15 underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] cursor-pointer transition-colors break-all"
+                title={`在侧边浏览区交互打开: ${finalUrl}`}
+              >
+                {codeInner}
+              </a>
+              {trail}
+            </React.Fragment>
+          )
+        }
+      }
+
       if (chunk.startsWith('http://') || chunk.startsWith('https://')) {
+        const { clean: url, trail } = stripTrailing(chunk)
         return (
-          <a
-            key={`url_${chunkIdx}`}
-            href={chunk}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              openWebPreview(chunk)
-            }}
-            className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all"
-            title={`在侧边浏览区交互打开: ${chunk}`}
-          >
-            {chunk}
-          </a>
+          <React.Fragment key={`url_${chunkIdx}`}>
+            <a
+              href={url}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                openWebPreview(url)
+              }}
+              className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all"
+              title={`在侧边浏览区交互打开: ${url}`}
+            >
+              {url}
+            </a>
+            {trail}
+          </React.Fragment>
+        )
+      }
+
+      if (chunk.startsWith('www.')) {
+        const { clean: url, trail } = stripTrailing(chunk)
+        const finalUrl = `https://${url}`
+        return (
+          <React.Fragment key={`www_${chunkIdx}`}>
+            <a
+              href={finalUrl}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                openWebPreview(finalUrl)
+              }}
+              className="text-[#0071e3] hover:text-[#005bb5] underline decoration-[#0071e3]/40 underline-offset-2 hover:decoration-[#0071e3] font-medium cursor-pointer transition-colors break-all"
+              title={`在侧边浏览区交互打开: ${finalUrl}`}
+            >
+              {url}
+            </a>
+            {trail}
+          </React.Fragment>
         )
       }
 

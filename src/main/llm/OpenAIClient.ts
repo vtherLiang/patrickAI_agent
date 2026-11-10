@@ -3,6 +3,7 @@ import https from 'https'
 import tls from 'tls'
 import url from 'url'
 import zlib from 'zlib'
+import { StringDecoder } from 'string_decoder'
 import { ProxyMode, TestProviderResult } from '@shared/types'
 
 export interface OpenAIToolSchema {
@@ -336,8 +337,10 @@ export class OpenAICompatibleClient {
 
           if (statusCode >= 400) {
             let errorBody = ''
-            res.on('data', (c) => (errorBody += c.toString('utf-8')))
+            const errDecoder = new StringDecoder('utf-8')
+            res.on('data', (c) => (errorBody += typeof c === 'string' ? c : errDecoder.write(c)))
             res.on('end', () => {
+              errorBody += errDecoder.end()
               if (idleTimer) clearTimeout(idleTimer)
               params.signal?.removeEventListener('abort', onAbort)
               let hint = ''
@@ -371,6 +374,7 @@ export class OpenAICompatibleClient {
           let buffer = ''
           let fullContent = ''
           let fullReasoning = ''
+          const decoder = new StringDecoder('utf-8')
           const toolCallMap = new Map<
             number,
             { id: string; name: string; argumentsJson: string }
@@ -378,13 +382,8 @@ export class OpenAICompatibleClient {
 
           resetWatchdog()
 
-          stream.on('data', (chunk: Buffer | string) => {
-            resetWatchdog()
-            buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
-
-            for (const rawLine of lines) {
+          const parseSseLines = (textLines: string[]): void => {
+            for (const rawLine of textLines) {
               const line = rawLine.trim()
               if (!line || !line.startsWith('data:')) continue
 
@@ -428,11 +427,25 @@ export class OpenAICompatibleClient {
                 // Ignore incomplete SSE chunk or heartbeat
               }
             }
+          }
+
+          stream.on('data', (chunk: Buffer | string) => {
+            resetWatchdog()
+            buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk)
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+            parseSseLines(lines)
           })
 
           stream.on('end', () => {
             if (idleTimer) clearTimeout(idleTimer)
             params.signal?.removeEventListener('abort', onAbort)
+
+            buffer += decoder.end()
+            if (buffer.trim()) {
+              parseSseLines(buffer.split('\n'))
+              buffer = ''
+            }
 
             const assembledToolCalls = Array.from(toolCallMap.entries())
               .sort((a, b) => a[0] - b[0])

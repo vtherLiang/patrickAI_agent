@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
+import { StringDecoder } from 'string_decoder'
 import { AgentSkillItem, SkillUsageExample, ToolCallItem, ToolPermissionLevel } from '@shared/types'
 import { maskSensitiveSecrets } from '@shared/secretMasker'
 import { OpenAIToolSchema } from '../llm/OpenAIClient'
@@ -365,15 +366,18 @@ export class ToolRegistry {
             output += '\n[Timeout: 命令执行超过 30 秒已自动终止]'
           }, 30000)
 
+          const stdoutDecoder = new StringDecoder('utf-8')
+          const stderrDecoder = new StringDecoder('utf-8')
+
           child.stdout.on('data', (chunk: Buffer) => {
-            const raw = chunk.toString()
+            const raw = typeof chunk === 'string' ? chunk : stdoutDecoder.write(chunk)
             const sanitized = maskSensitiveSecrets(raw)
             output += sanitized
             ctx.onTerminalOutput?.(callId, sanitized, 'stdout')
           })
 
           child.stderr.on('data', (chunk: Buffer) => {
-            const raw = chunk.toString()
+            const raw = typeof chunk === 'string' ? chunk : stderrDecoder.write(chunk)
             const sanitized = maskSensitiveSecrets(raw)
             output += sanitized
             ctx.onTerminalOutput?.(callId, sanitized, 'stderr')
@@ -381,6 +385,11 @@ export class ToolRegistry {
 
           child.on('close', (code) => {
             clearTimeout(timeout)
+            const remainingOut = stdoutDecoder.end()
+            if (remainingOut) output += maskSensitiveSecrets(remainingOut)
+            const remainingErr = stderrDecoder.end()
+            if (remainingErr) output += maskSensitiveSecrets(remainingErr)
+
             const sanitizedOutput = maskSensitiveSecrets(output)
             const truncated =
               sanitizedOutput.length > 6000
