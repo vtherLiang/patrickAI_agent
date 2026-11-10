@@ -61,6 +61,128 @@ function resolveSafePath(workspaceDir: string, targetPath: string): string {
   return path.resolve(workspaceDir, targetPath)
 }
 
+/**
+ * SWE-agent ACI (Agent-Computer Interface) Instant Syntax & Structural Linter:
+ * Performs zero-latency post-edit structural verification on source files (.json, .ts, .tsx, .js, .jsx, .py)
+ * so syntax errors or unbalanced delimiters are immediately surfaced to the agent for self-correction.
+ */
+export function runAciSyntaxLinter(
+  filePath: string,
+  content: string
+): { ok: boolean; diagnostics: string[] } {
+  const ext = path.extname(filePath).toLowerCase()
+  const diagnostics: string[] = []
+
+  if (ext === '.json') {
+    try {
+      JSON.parse(content)
+    } catch (err) {
+      diagnostics.push(`JSON 语法解析失败: ${(err as Error).message}`)
+    }
+    return { ok: diagnostics.length === 0, diagnostics }
+  }
+
+  // Check for accidental unresolved git conflict markers in code files
+  if (['.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html'].includes(ext)) {
+    const lines = content.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      if (/^(<<<<<<<|=======|>>>>>>>)(\s|$)/.test(lines[i])) {
+        diagnostics.push(`第 ${i + 1} 行检测到未解决的 Git 冲突标记: ${lines[i].slice(0, 30)}`)
+      }
+    }
+  }
+
+  // Fast lexical bracket/brace balance check for TS/JS family
+  if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
+    const stack: Array<{ char: string; line: number }> = []
+    const pairs: Record<string, string> = { '{': '}', '(': ')', '[': ']' }
+    const closingToOpening: Record<string, string> = { '}': '{', ')': '(', ']': '[' }
+
+    let inSingle = false
+    let inDouble = false
+    let inTemplate = false
+    let inLineComment = false
+    let inBlockComment = false
+    let lineNum = 1
+
+    for (let i = 0; i < content.length; i++) {
+      const ch = content[i]
+      const next = content[i + 1]
+
+      if (ch === '\n') {
+        lineNum++
+        inLineComment = false
+        continue
+      }
+
+      if (inLineComment) continue
+      if (inBlockComment) {
+        if (ch === '*' && next === '/') {
+          inBlockComment = false
+          i++
+        }
+        continue
+      }
+
+      if (!inSingle && !inDouble && !inTemplate) {
+        if (ch === '/' && next === '/') {
+          inLineComment = true
+          i++
+          continue
+        }
+        if (ch === '/' && next === '*') {
+          inBlockComment = true
+          i++
+          continue
+        }
+      }
+
+      if (ch === '\\' && (inSingle || inDouble || inTemplate)) {
+        i++
+        continue
+      }
+
+      if (!inDouble && !inTemplate && ch === "'") {
+        inSingle = !inSingle
+        continue
+      }
+      if (!inSingle && !inTemplate && ch === '"') {
+        inDouble = !inDouble
+        continue
+      }
+      if (!inSingle && !inDouble && ch === '`') {
+        inTemplate = !inTemplate
+        continue
+      }
+
+      if (inSingle || inDouble || inTemplate) continue
+
+      if (pairs[ch]) {
+        stack.push({ char: ch, line: lineNum })
+      } else if (closingToOpening[ch]) {
+        const expectedOpen = closingToOpening[ch]
+        const last = stack.pop()
+        if (!last) {
+          diagnostics.push(`第 ${lineNum} 行存在多余的闭合符号 '${ch}'（无匹配的 '${expectedOpen}'）`)
+          break
+        } else if (last.char !== expectedOpen) {
+          diagnostics.push(
+            `第 ${lineNum} 行闭合符号 '${ch}' 与第 ${last.line} 行的 '${last.char}' 不匹配`
+          )
+          break
+        }
+      }
+    }
+
+    if (diagnostics.length === 0 && stack.length > 0) {
+      const unclosed = stack[stack.length - 1]
+      diagnostics.push(`第 ${unclosed.line} 行开启的符号 '${unclosed.char}' 直到文件末尾仍未闭合`)
+    }
+  }
+
+  return { ok: diagnostics.length === 0, diagnostics }
+}
+
 export class ToolRegistry {
   private tools = new Map<string, RegisteredTool>()
 
@@ -273,7 +395,11 @@ export class ToolRegistry {
         }
         const updated = content.replace(oldStr, newStr)
         fs.writeFileSync(filePath, updated, 'utf-8')
-        return `Success: 已成功更新文件 ${args.file_path}`
+        const lintRes = runAciSyntaxLinter(filePath, updated)
+        if (!lintRes.ok) {
+          return `Warning [SWE-agent ACI Linter 语法预检告警]: 文件 ${args.file_path} 已写入，但检测到结构或语法异常:\n- ${lintRes.diagnostics.join('\n- ')}\n请立即调用 edit_file 修复上述语法/括号闭合问题！`
+        }
+        return `Success: 已成功更新文件 ${args.file_path} (SWE-agent ACI 语法校验通过)`
       }
     })
 
@@ -324,7 +450,11 @@ export class ToolRegistry {
           fs.mkdirSync(dir, { recursive: true })
         }
         fs.writeFileSync(filePath, content, 'utf-8')
-        return `Success: 已成功写入文件 ${args.file_path} (${content.split('\n').length} 行)`
+        const lintRes = runAciSyntaxLinter(filePath, content)
+        if (!lintRes.ok) {
+          return `Warning [SWE-agent ACI Linter 语法预检告警]: 文件 ${args.file_path} (${content.split('\n').length} 行) 已写入，但检测到结构或语法异常:\n- ${lintRes.diagnostics.join('\n- ')}\n请立即调用 edit_file 修复上述语法/括号闭合问题！`
+        }
+        return `Success: 已成功写入文件 ${args.file_path} (${content.split('\n').length} 行，SWE-agent ACI 语法校验通过)`
       }
     })
 
@@ -352,11 +482,20 @@ export class ToolRegistry {
       execute: async (args, ctx, callId) => {
         const cmd = String(args.command || '')
         return new Promise<string>((resolve) => {
-          const child = spawn('/bin/zsh', ['-c', cmd], {
+          const isWin = process.platform === 'win32'
+          const shellBin = isWin
+            ? 'powershell.exe'
+            : fs.existsSync('/bin/zsh')
+              ? '/bin/zsh'
+              : '/bin/sh'
+          const shellArgs = isWin ? ['-NoProfile', '-Command', cmd] : ['-c', cmd]
+          const child = spawn(shellBin, shellArgs, {
             cwd: ctx.workspaceDir,
             env: {
               ...process.env,
-              PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`
+              PATH: isWin
+                ? process.env.PATH || ''
+                : `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`
             }
           })
 
@@ -365,6 +504,11 @@ export class ToolRegistry {
             child.kill('SIGTERM')
             output += '\n[Timeout: 命令执行超过 30 秒已自动终止]'
           }, 30000)
+
+          child.on('error', (err) => {
+            clearTimeout(timeout)
+            resolve(`Command: ${maskSensitiveSecrets(cmd)}\nError: ${err.message}`)
+          })
 
           const stdoutDecoder = new StringDecoder('utf-8')
           const stderrDecoder = new StringDecoder('utf-8')
@@ -608,6 +752,90 @@ export class ToolRegistry {
           parsed,
           ctx.workspaceDir
         )
+      }
+    })
+
+    // 11. inspect_code_symbols (SWE-agent & AutoCodeRover AST-level Symbol Outline & Definition Probe)
+    this.register({
+      name: 'inspect_code_symbols',
+      description:
+        '【SWE-agent ACI 代码符号探针】快速提取指定源码文件中的所有类(class)、接口(interface)、类型(type)、函数(function/method)的符号大纲与精确行号，或直接定位特定 symbol_name 的定义代码块（无需通读整篇大文件）。',
+      permissionLevel: 'readonly',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: '目标源码文件相对或绝对路径' },
+          symbol_name: {
+            type: 'string',
+            description: '要精准定位的类名、函数名或接口名称（可选；若不填则返回全文件符号大纲）'
+          },
+          description: {
+            type: 'string',
+            description: '简短一句话中文总结探查意图（如：提取 QueryEngine 核心方法大纲）'
+          }
+        },
+        required: ['file_path']
+      },
+      execute: async (args, ctx) => {
+        const filePath = resolveSafePath(ctx.workspaceDir, String(args.file_path || ''))
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+          return `Error: 源码文件不存在 -> ${filePath}`
+        }
+
+        const raw = fs.readFileSync(filePath, 'utf-8')
+        const lines = raw.split('\n')
+        const targetSymbol = args.symbol_name ? String(args.symbol_name).trim() : ''
+
+        const symbolRegex =
+          /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(class|interface|type|enum|function|const|let)\s+([A-Za-z0-9_$]+)|^\s*(?:public|private|protected|static|async|\s)*([A-Za-z0-9_$]+)\s*\([^;]*\)\s*(?::\s*[^{]+)?\{/
+
+        const symbols: Array<{ kind: string; name: string; line: number; signature: string }> = []
+        const reserved = new Set(['if', 'for', 'while', 'switch', 'catch', 'constructor', 'return'])
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i]
+          const m = line.match(symbolRegex)
+          if (m) {
+            const kind = m[1] || 'method'
+            const name = m[2] || m[3]
+            if (name && !reserved.has(name)) {
+              symbols.push({
+                kind,
+                name,
+                line: i + 1,
+                signature: maskSensitiveSecrets(line.trim()).slice(0, 110)
+              })
+            }
+          }
+        }
+
+        if (targetSymbol) {
+          const hit = symbols.find(
+            (s) => s.name === targetSymbol || s.name.toLowerCase() === targetSymbol.toLowerCase()
+          )
+          if (!hit) {
+            return `未在 ${args.file_path} 中找到符号 "${targetSymbol}"。该文件可用符号 (${symbols.length}):\n${symbols
+              .slice(0, 40)
+              .map((s) => `  L${s.line} [${s.kind}] ${s.name}`)
+              .join('\n')}`
+          }
+          const start = Math.max(1, hit.line - 2)
+          const end = Math.min(lines.length, hit.line + 75)
+          const snippet = lines
+            .slice(start - 1, end)
+            .map((l, idx) => `${String(start + idx).padStart(4, ' ')} | ${maskSensitiveSecrets(l)}`)
+            .join('\n')
+          return `[ACI Symbol Probe] ${args.file_path} -> ${hit.kind} ${hit.name} (Lines ${start}-${end} of ${lines.length}):\n${snippet}`
+        }
+
+        if (symbols.length === 0) {
+          return `File ${args.file_path} (${lines.length} lines): 未检出标准类/函数符号声明，建议调用 read_file 查看。`
+        }
+
+        return `[ACI Symbol Outline] ${args.file_path} (共 ${lines.length} 行, 检出 ${symbols.length} 个符号):\n${symbols
+          .slice(0, 120)
+          .map((s) => `  L${String(s.line).padEnd(4, ' ')} | [${s.kind}] ${s.name} -> ${s.signature}`)
+          .join('\n')}`
       }
     })
   }

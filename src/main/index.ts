@@ -56,7 +56,40 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 
-const defaultWorkspace = process.cwd()
+function resolveDefaultWorkspace(): string {
+  const cwd = process.cwd()
+  const isSystemOrReadonlyCwd =
+    cwd === '/' ||
+    cwd === '\\' ||
+    cwd.startsWith('/Applications') ||
+    cwd.includes('.app/Contents') ||
+    /^([a-zA-Z]:\\(Windows|Program Files))/i.test(cwd)
+
+  if (!app.isPackaged && !isSystemOrReadonlyCwd) {
+    return cwd
+  }
+
+  if (!isSystemOrReadonlyCwd) {
+    try {
+      fs.accessSync(cwd, fs.constants.W_OK)
+      return cwd
+    } catch {
+      // fall through to user workspace directory
+    }
+  }
+
+  const fallbackWorkspace = path.join(os.homedir(), 'PatrickAI-Workspace')
+  try {
+    if (!fs.existsSync(fallbackWorkspace)) {
+      fs.mkdirSync(fallbackWorkspace, { recursive: true })
+    }
+    return fallbackWorkspace
+  } catch {
+    return os.homedir()
+  }
+}
+
+const defaultWorkspace = resolveDefaultWorkspace()
 const configStore = new ConfigStore(defaultWorkspace)
 const llmClient = new OpenAICompatibleClient()
 const toolRegistry = new ToolRegistry()
@@ -168,8 +201,8 @@ function createWindow(): void {
     minHeight: 680,
     show: false,
     icon: fs.existsSync(appIconPath) ? appIconPath : undefined,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 18 },
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 18, y: 18 } } : {}),
     backgroundColor: '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -233,8 +266,21 @@ function setupTrayAndShortcuts(): void {
     ? nativeImage.createFromPath(trayIconPath)
     : nativeImage.createEmpty()
   tray = new Tray(icon)
-  tray.setTitle(' ClaudeCode')
+  if (process.platform === 'darwin') {
+    tray.setTitle(' ClaudeCode')
+  }
   tray.setToolTip('Claude Code Studio (Codex Workbench + Swarm + L1-L5 AutoDream)')
+
+  tray.on('double-click', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
+  if (process.platform !== 'darwin') {
+    tray.on('click', () => {
+      mainWindow?.show()
+      mainWindow?.focus()
+    })
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -445,6 +491,16 @@ function openUrlInBrowser(payload: { browserId: string; url: string; appPath?: s
     execFile('open', ['-a', appPath, url], (err) => {
       if (err) {
         console.warn(`open -a ${appPath} failed, falling back to shell.openExternal:`, err)
+        shell.openExternal(url)
+      }
+    })
+    return { ok: true }
+  }
+
+  if (process.platform === 'win32') {
+    execFile(appPath, [url], (err) => {
+      if (err) {
+        console.warn(`execFile ${appPath} failed, falling back to shell.openExternal:`, err)
         shell.openExternal(url)
       }
     })

@@ -1,20 +1,73 @@
 {
-  "name": "claude-code-desktop",
+  "name": "patrick-ai-agent",
   "version": "1.0.0",
-  "description": "Clean-room desktop implementation of Claude Code architecture (Workbench + Coordinator Swarm + KAIROS/Dream Daemon)",
+  "description": "PatrickAI Agent — Clean-room desktop implementation of Claude Code architecture (Workbench + Coordinator Swarm + KAIROS/Dream Daemon)",
+  "author": "vtherLiang",
+  "homepage": "https://github.com/vtherLiang/patrickAI_agent",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vtherLiang/patrickAI_agent.git"
+  },
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:all": "electron-vite build && electron-builder --mac --win"
   },
   "build": {
-    "appId": "com.claudecode.studio",
-    "productName": "Claude Code Studio",
+    "appId": "com.patrickai.agent",
+    "productName": "PatrickAI Agent",
+    "directories": {
+      "output": "dist"
+    },
+    "npmRebuild": false,
+    "files": [
+      "out/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "mac": {
       "icon": "resources/icon.icns",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "PatrickAI-Agent-mac-${arch}-${version}.${ext}"
+    },
+    "win": {
+      "icon": "resources/icon.png",
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "artifactName": "PatrickAI-Agent-win-${arch}-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "PatrickAI-Agent-Windows-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "vtherLiang",
+      "repo": "patrickAI_agent"
     }
   },
   "dependencies": {
@@ -30,6 +83,7 @@
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
     "electron": "^33.2.0",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^2.3.0",
     "postcss": "^8.4.49",
     "react": "^18.3.1",

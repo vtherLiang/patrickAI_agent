@@ -208,15 +208,24 @@ export class QueryEngine {
     let lastAssistantMsg: ChatMessage | null = null
     let isFirstTurnStep = true
 
+    // LATS (Language Agent Tree Search) MCTS State Tracker & Reflexion Meta-Memory Buffer
+    const actionSignatureCounts = new Map<string, number>()
+    const latsPrunedSignatures = new Set<string>()
+    let latsBestValueScore = 0.85
+    let latsBacktrackCount = 0
+    const reflexionLessons: string[] = []
+
     try {
+      // 1. Prefix-Preserved Layer 1 MicroCompact:
+      // Executed ONCE at the Turn Boundary before the multi-step loop begins!
+      // Keeps all message prefixes 100% immutable during intra-turn tool loops to maximize API Prompt Cache hits.
+      this.messages = this.compactPipeline.runMicroCompact(this.messages, 8)
+
       const maxTurns = 20
       let turnsRemaining = maxTurns
       while (turnsRemaining-- > 0) {
         const currentCfg = this.configStore.getConfig()
         const permissionMode = currentCfg.permissionMode || 'default'
-
-        // 1. Run Layer 1 MicroCompact automatically before every turn (protects active turn outputs!)
-        this.messages = this.compactPipeline.runMicroCompact(this.messages, 8)
 
         // 2. Check Layer 2 AutoCompact threshold
         const stats = this.getTokenStats()
@@ -261,6 +270,18 @@ export class QueryEngine {
             ? `[系统收敛警告]: 当前任务调用工具轮次即将达到系统上限（剩余 ${turnsRemaining} 轮）。请不要再调用任何新的工具，请立即依据已读取/获取的所有文件内容与事实细节，向用户交付完整、条理清晰的最终分析报告与核心结论！`
             : undefined
 
+        // Build Dynamic Working Scratchpad (placed at tail to preserve prefix KV cache)
+        const workingScratchpad = this.compactPipeline.buildWorkingScratchpad(
+          effectiveQuery,
+          collectedToolCalls,
+          {
+            bestValue: latsBestValueScore,
+            prunedSignatures: Array.from(latsPrunedSignatures),
+            backtrackCount: latsBacktrackCount
+          },
+          reflexionLessons
+        )
+
         const apiMessages = this.buildOpenAIMessages(
           currentCfg.workspaceDir,
           permissionMode,
@@ -269,7 +290,8 @@ export class QueryEngine {
           currentCfg.mainModel,
           assistantMsgId,
           isContinuation ? lastInterruptedReasoning : undefined,
-          convergenceWarning
+          convergenceWarning,
+          workingScratchpad
         )
 
         const result = await this.llmClient.streamChatCompletion({
@@ -412,6 +434,30 @@ export class QueryEngine {
             parsedArgs = {}
           }
 
+          // Canonicalize action signature for LATS (Language Agent Tree Search) loop & dead-end pruning
+          const canonicalArgs = Object.keys(parsedArgs)
+            .filter((k) => k !== 'description')
+            .sort()
+            .map((k) => `${k}:${String(parsedArgs[k]).slice(0, 120)}`)
+            .join('|')
+          const actionSignature = `${toolCall.name}(${canonicalArgs})`
+          const prevCount = actionSignatureCounts.get(actionSignature) || 0
+          actionSignatureCounts.set(actionSignature, prevCount + 1)
+
+          // LATS Pre-Execution Branch Pruning Gate: block repeated dead-end or stagnant calls
+          if (latsPrunedSignatures.has(actionSignature)) {
+            latsBacktrackCount += 1
+            latsBestValueScore = Math.max(0.35, latsBestValueScore - 0.08)
+            const pruneMsg = `[LATS 树搜索回溯与剪枝拦截 · Backtrack #${latsBacktrackCount}]: 行动分支 "${actionSignature}" 已被评估为死胡同或重复无效调用 (V(s)=0.12)，已自动剪枝并回溯至高价值父节点！请立即放弃该重复参数，切换其他工具或基于已有事实直接总结回答。`
+            toolCall.status = 'error'
+            toolCall.resultOutput = pruneMsg
+            toolCall.completedAt = Date.now()
+            collectedToolCalls.push(toolCall)
+            this.appendToolMessage(toolCall.id, toolCall.name, toolCall.resultOutput)
+            this.emitFullState()
+            continue
+          }
+
           try {
             const output = await regTool.execute(
               parsedArgs,
@@ -436,6 +482,22 @@ export class QueryEngine {
             toolCall.status = 'error'
             toolCall.resultOutput = `工具执行异常: ${(err as Error).message}`
             toolCall.completedAt = Date.now()
+          }
+
+          // LATS Post-Execution State Value Estimator V(s) & Reflexion Meta-Evaluator
+          const evaluation = this.evaluateLATSAndReflexion(
+            toolCall,
+            actionSignature,
+            prevCount + 1
+          )
+          latsBestValueScore = evaluation.updatedValueScore
+          if (evaluation.shouldPrune) {
+            latsPrunedSignatures.add(actionSignature)
+            latsBacktrackCount += 1
+          }
+          if (evaluation.reflexionLesson) {
+            reflexionLessons.push(evaluation.reflexionLesson)
+            toolCall.resultOutput = `${toolCall.resultOutput}\n\n${evaluation.reflexionLesson}`
           }
 
           collectedToolCalls.push(toolCall)
@@ -805,6 +867,78 @@ export class QueryEngine {
     return combinedText
   }
 
+  /**
+   * LATS (Language Agent Tree Search, ICML 2024) State Value Estimator V(s)
+   * & Reflexion (NeurIPS 2023) Meta-Self-Correction Evaluator.
+   */
+  private evaluateLATSAndReflexion(
+    toolCall: ToolCallItem,
+    actionSignature: string,
+    callCount: number
+  ): {
+    updatedValueScore: number
+    shouldPrune: boolean
+    reflexionLesson?: string
+  } {
+    const out = toolCall.resultOutput || ''
+
+    // 1. Detect duplicate stagnant exploration
+    if (callCount >= 2 && ['read_file', 'search_files', 'inspect_code_symbols'].includes(toolCall.name)) {
+      return {
+        updatedValueScore: 0.22,
+        shouldPrune: true,
+        reflexionLesson: `[Reflexion 元反思自愈]: 检测到重复调用相同只读探针 "${actionSignature}" (第 ${callCount} 次)。假设偏差: 重复读取同一位置不会产生新信息 -> 修正处方: 该分支已被 LATS 剪枝，请基于已有内容推进或探查其他模块。`
+      }
+    }
+
+    // 2. Detect explicit tool errors or missing files
+    if (toolCall.status === 'error' || out.startsWith('Error:')) {
+      if (out.includes('未找到完全匹配的 old_string')) {
+        return {
+          updatedValueScore: 0.25,
+          shouldPrune: true,
+          reflexionLesson: `[Reflexion 元反思自愈]: edit_file 锚点匹配失败。假设偏差: 凭记忆或过期片段构造了 old_string -> 环境根因: 文件实际内容或缩进与预期不一致 -> 修正处方: 必须先调用 read_file 或 inspect_code_symbols 获取目标行最新精确文本，再执行替换。`
+        }
+      }
+      if (out.includes('不存在')) {
+        return {
+          updatedValueScore: 0.20,
+          shouldPrune: true,
+          reflexionLesson: `[Reflexion 元反思自愈]: 目标路径不存在 (${actionSignature})。假设偏差: 臆测了未验证的文件路径 -> 修正处方: 该无效路径已被 LATS 剪枝，请先调用 search_files 检索工作区真实文件树。`
+        }
+      }
+      return {
+        updatedValueScore: 0.25,
+        shouldPrune: callCount >= 2,
+        reflexionLesson: `[Reflexion 元反思自愈]: 工具 ${toolCall.name} 执行报错 -> 修正处方: 请分析错误原因并调整参数或改用替代工具，切勿原样重试。`
+      }
+    }
+
+    // 3. Detect SWE-agent ACI Syntax Linter warnings after code edits
+    if (out.includes('ACI Linter 语法预检告警')) {
+      return {
+        updatedValueScore: 0.35,
+        shouldPrune: false,
+        reflexionLesson: `[Reflexion 元反思自愈 · ACI 语法阻断]: 刚才的修改引入了未闭合括号或语法错误 -> 修正处方: 请立即在下一步调用 edit_file 修复告警指出的行号，严禁带着破损语法继续其他任务！`
+      }
+    }
+
+    // 4. Detect non-zero exit code or command failure in run_bash
+    if (toolCall.name === 'run_bash' && (out.includes('Exit Code: 1') || out.includes('Exit Code: 127') || out.includes('command not found'))) {
+      return {
+        updatedValueScore: 0.32,
+        shouldPrune: callCount >= 2,
+        reflexionLesson: `[Reflexion 元反思自愈]: 终端命令执行返回非零状态 (${actionSignature.slice(0, 80)}) -> 修正处方: 若为文档/代码读取请直接使用内置 read_file (已原生支持 PDF/Word/Excel) 或 inspect_code_symbols，避免盲目依赖外部命令。`
+      }
+    }
+
+    // 5. High-value state transition
+    return {
+      updatedValueScore: 0.94,
+      shouldPrune: false
+    }
+  }
+
   private buildOpenAIMessages(
     workspaceDir: string,
     permissionMode: AgentPermissionMode,
@@ -813,7 +947,8 @@ export class QueryEngine {
     modelName: string,
     currentAssistantMsgId?: string,
     interruptedReasoningHint?: string,
-    convergenceHint?: string
+    convergenceHint?: string,
+    workingScratchpad?: string
   ): OpenAIMessagePayload[] {
     const enableVision = this.supportsVisionImageUrl(modelName)
     let systemPrompt = SystemPromptBuilder.build(workspaceDir, permissionMode, {
@@ -830,10 +965,8 @@ export class QueryEngine {
       systemPrompt += `\n\n[上下文先验·上一轮被中止思考概要]:\n${interruptedReasoningHint.slice(0, 1800)}\n(注意：用户此前已在思考阶段中止并显式指令「继续输出」。请直接承接上述思考脉络，无需进行漫长重新思考，立即输出结构化、详尽的最终回答与代码解决方案！)`
     }
 
-    if (convergenceHint) {
-      systemPrompt += `\n\n${convergenceHint}`
-    }
-
+    // Prefix-Preserved KV Cache Design:
+    // Keep `systemPrompt` and historical messages 100% constant across all intra-turn steps!
     const payload: OpenAIMessagePayload[] = [
       {
         role: 'system',
@@ -881,6 +1014,24 @@ export class QueryEngine {
           name: msg.toolName,
           content: msg.content
         })
+      }
+    }
+
+    // Attach Dynamic Working Scratchpad & Convergence Hint strictly at the tail message
+    // so prefix tokens (0..N-1) remain byte-for-byte identical for LLM Prompt Cache hits!
+    const tailDynamicBlock = [workingScratchpad, convergenceHint].filter(Boolean).join('\n\n')
+    if (tailDynamicBlock && payload.length > 1) {
+      const lastItem = payload[payload.length - 1]
+      if (lastItem.role === 'tool' && typeof lastItem.content === 'string') {
+        payload[payload.length - 1] = {
+          ...lastItem,
+          content: `${lastItem.content}\n\n${tailDynamicBlock}`
+        }
+      } else if (lastItem.role === 'user' && typeof lastItem.content === 'string') {
+        payload[payload.length - 1] = {
+          ...lastItem,
+          content: `${lastItem.content}\n\n${tailDynamicBlock}`
+        }
       }
     }
 

@@ -96,6 +96,155 @@ function computeTokenSimilarity(a: string, b: string): number {
 }
 
 /**
+ * Bilingual Domain Semantic Concept Synonym Clusters for Dense Vector Projection.
+ * Bridges semantic paraphrasing gaps where surface lexical tokens do not overlap
+ * (e.g., "高并发锁争用" <-> "async parallel race condition", "耗时卡顿" <-> "latency throughput cache").
+ */
+const SEMANTIC_CONCEPT_CLUSTERS: Array<{ id: string; terms: string[] }> = [
+  {
+    id: 'concept_concurrency',
+    terms: ['并发', '异步', '锁', '竞态', '并行', '协程', '队列', 'concurrency', 'async', 'parallel', 'mutex', 'promise', 'swarm', 'worktree']
+  },
+  {
+    id: 'concept_performance',
+    terms: ['性能', '延迟', '吞吐', '优化', '提速', '缓存', '耗时', '卡顿', '内存', 'performance', 'latency', 'throughput', 'cache', 'optimize', 'fast']
+  },
+  {
+    id: 'concept_memory_rag',
+    terms: ['记忆', '遗忘', '上下文', '压缩', '检索', '召回', '结晶', '图谱', '向量', 'memory', 'context', 'compact', 'token', 'recall', 'hipporag', 'ebbinghaus', 'memdir', 'ppr']
+  },
+  {
+    id: 'concept_architecture',
+    terms: ['架构', '模块', '解耦', '设计', '契约', '接口', '分层', '拓扑', 'architecture', 'module', 'design', 'interface', 'contract', 'layer', 'schema', 'dag', 'sop']
+  },
+  {
+    id: 'concept_debugging',
+    terms: ['报错', '异常', '崩溃', '修复', '漏洞', '踩坑', '教训', '自愈', '反思', 'bug', 'error', 'fix', 'crash', 'exception', 'debug', 'pitfall', 'reflexion']
+  },
+  {
+    id: 'concept_build_deploy',
+    terms: ['构建', '打包', '编译', '发布', '安装包', '签名', '跨平台', '终端', 'build', 'compile', 'package', 'dist', 'dmg', 'exe', 'electron', 'tsc', 'node', 'homebrew']
+  },
+  {
+    id: 'concept_ui_aesthetics',
+    terms: ['界面', '样式', '纯白', '动画', '布局', '视觉', '毛玻璃', '极简', '交互', '折叠', 'ui', 'ux', 'style', 'apple', 'tailwind', 'theme', 'animation']
+  },
+  {
+    id: 'concept_security_perm',
+    terms: ['安全', '权限', '只读', '拦截', '沙箱', '脱敏', '密钥', '红线', 'security', 'permission', 'readonly', 'plan', 'bypass', 'sandbox', 'secret']
+  },
+  {
+    id: 'concept_doc_analysis',
+    terms: ['文档', '论文', '知识库', '解析', '提取', '总结', '结论', '要点', '精读', 'pdf', 'doc', 'paper', 'extract', 'ocr', 'summary', 'analysis', 'slice', 'slicing']
+  },
+  {
+    id: 'concept_agent_reasoning',
+    terms: ['思考', '推理', '搜索', '规划', '回溯', '剪枝', '智能体', '状态树', 'reasoning', 'search', 'plan', 'lats', 'mcts', 'agent', 'react', 'scratchpad']
+  },
+  {
+    id: 'concept_skill_mcp',
+    terms: ['技能', '工具', '插件', '挂载', '服务', '协议', '装载', '扩展', 'skill', 'mcp', 'tool', 'plugin', 'server', 'aci']
+  },
+  {
+    id: 'concept_testing_lint',
+    terms: ['测试', '校验', '断言', '回归', '边界', '类型', '语法', '检查', 'test', 'verify', 'assert', 'lint', 'typecheck', 'ast']
+  }
+]
+
+/**
+ * Computes a L2-normalized 128-dimensional Dense Semantic Projection Vector:
+ * - Dimensions 0..23: Semantic Concept Synonym Cluster activations (captures synonym/paraphrase similarity)
+ * - Dimensions 24..127: Signed Random Projection Hash (SimHash / Feature Hashing) of bilingual stems & char n-grams
+ */
+export function computeDenseSemanticEmbedding(text: string): Float32Array {
+  const DIM = 128
+  const vec = new Float32Array(DIM)
+  const lower = text.toLowerCase()
+
+  // 1. Concept cluster semantic projection (dims 0..23)
+  for (let cIdx = 0; cIdx < SEMANTIC_CONCEPT_CLUSTERS.length; cIdx++) {
+    const cluster = SEMANTIC_CONCEPT_CLUSTERS[cIdx]
+    let hits = 0
+    for (const term of cluster.terms) {
+      if (lower.includes(term)) hits++
+    }
+    if (hits > 0) {
+      vec[cIdx] = Math.min(2.2, 0.95 + Math.log(1 + hits) * 0.65)
+    }
+  }
+
+  // 2. Signed feature hashing of tokens into dims 24..127
+  const tokens = tokenizeBilingual(lower)
+  for (const tok of tokens) {
+    let h1 = 2166136261
+    let h2 = 16777619
+    for (let i = 0; i < tok.length; i++) {
+      const code = tok.charCodeAt(i)
+      h1 ^= code
+      h1 = Math.imul(h1, 16777619)
+      h2 ^= code * 31
+      h2 = Math.imul(h2, 2166136261)
+    }
+    const bucket = 24 + (Math.abs(h1) % (DIM - 24))
+    const sign = (h2 & 1) === 0 ? 1 : -1
+    vec[bucket] += sign * 0.55
+  }
+
+  // L2 normalization
+  let normSq = 0
+  for (let i = 0; i < DIM; i++) {
+    normSq += vec[i] * vec[i]
+  }
+  const norm = Math.sqrt(normSq)
+  if (norm > 1e-6) {
+    for (let i = 0; i < DIM; i++) {
+      vec[i] /= norm
+    }
+  }
+  return vec
+}
+
+export function computeDenseCosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i]
+  }
+  return Math.max(0, Math.min(1, dot))
+}
+
+/**
+ * Extracts Knowledge Graph (KG) Entities (technical identifiers, file/module names, concept cluster IDs, keywords)
+ * for HippoRAG Bipartite Entity-Memory Graph construction & Personalized PageRank (PPR).
+ */
+function extractKnowledgeGraphEntities(text: string, extraKeywords: string[] = [], tags: string[] = []): string[] {
+  const lower = text.toLowerCase()
+  const entities = new Set<string>()
+
+  for (const kw of extraKeywords) {
+    if (kw && kw.trim().length >= 2) entities.add(`ent:${kw.trim().toLowerCase()}`)
+  }
+  for (const tag of tags) {
+    if (tag && tag.trim().length >= 2) entities.add(`tag:${tag.trim().toLowerCase()}`)
+  }
+
+  // Extract CamelCase / file / technical entities
+  const techMatches = text.match(/[A-Za-z][A-Za-z0-9_.-]{2,}/g) || []
+  for (const tm of techMatches) {
+    entities.add(`tech:${tm.toLowerCase()}`)
+  }
+
+  // Extract activated semantic concept clusters as high-level KG hub entities
+  for (const cluster of SEMANTIC_CONCEPT_CLUSTERS) {
+    if (cluster.terms.some((t) => lower.includes(t))) {
+      entities.add(`hub:${cluster.id}`)
+    }
+  }
+
+  return Array.from(entities)
+}
+
+/**
  * MemoryBank Ebbinghaus Forgetting Curve with Recall Reinforcement:
  * R(m) = exp(- elapsedDays / (halfLifeDays * (1 + ln(1 + accessCount))))
  */
@@ -275,26 +424,50 @@ export class HierarchicalMemoryEngine {
   }
 
   /**
-   * A-MEM Zettelkasten Graph Linker:
-   * Connects atomic memory notes sharing tags or high lexical overlap so HippoRAG 1-hop spreading works.
+   * A-MEM Zettelkasten & HippoRAG Knowledge Graph Linker:
+   * Connects atomic memory notes via shared KG entities, 128-D dense semantic embeddings, and lexical overlap
+   * so multi-hop Personalized PageRank (PPR) random walk can propagate across associative bridges.
    */
   private rebuildAssociativeLinks(): void {
+    const denseMap = new Map<string, Float32Array>()
+    const entityMap = new Map<string, Set<string>>()
+
+    for (const node of this.nodes) {
+      const fullText = `${node.title} ${node.content} ${node.keywords.join(' ')}`
+      denseMap.set(node.id, computeDenseSemanticEmbedding(fullText))
+      entityMap.set(
+        node.id,
+        new Set(extractKnowledgeGraphEntities(fullText, node.keywords, node.tags))
+      )
+    }
+
     for (const node of this.nodes) {
       const linked: Array<{ id: string; sim: number }> = []
+      const vecA = denseMap.get(node.id)!
+      const entA = entityMap.get(node.id)!
+
       for (const other of this.nodes) {
         if (other.id === node.id) continue
-        const sharedTags = node.tags.filter((t) => other.tags.includes(t)).length
+        const vecB = denseMap.get(other.id)!
+        const entB = entityMap.get(other.id)!
+
+        let sharedEntities = 0
+        for (const e of entA) {
+          if (entB.has(e)) sharedEntities++
+        }
+
+        const denseSim = computeDenseCosineSimilarity(vecA, vecB)
         const lexSim = computeTokenSimilarity(
           `${node.title} ${node.keywords.join(' ')}`,
           `${other.title} ${other.keywords.join(' ')}`
         )
-        const totalSim = sharedTags * 0.25 + lexSim
+        const totalSim = sharedEntities * 0.16 + denseSim * 0.45 + lexSim * 0.45
         if (totalSim >= 0.28) {
           linked.push({ id: other.id, sim: totalSim })
         }
       }
       linked.sort((a, b) => b.sim - a.sim)
-      node.links = linked.slice(0, 4).map((l) => l.id)
+      node.links = linked.slice(0, 5).map((l) => l.id)
     }
   }
 
@@ -372,9 +545,11 @@ export class HierarchicalMemoryEngine {
   /**
    * Per-Query Hybrid Memory Search & Callback (`retrieveForQuery`):
    * Runs automatically on EVERY user inquiry before calling the LLM!
-   * - L1 Core Philosophy nodes get constitutional priority
-   * - L2-L5 nodes are scored by BM25/token overlap + keyword/tag match + Ebbinghaus retention + importance
-   * - HippoRAG 1-hop spreading activation boosts linked Zettelkasten neighbors
+   * Upgraded with Frontier Hybrid Retrieval + HippoRAG Personalized PageRank (PPR):
+   * 1. Sparse BM25 IDF lexical scoring
+   * 2. 128-D Dense Semantic Concept & N-gram Projection Cosine Similarity
+   * 3. HippoRAG (NeurIPS 2024) Entity-Memory Knowledge Graph Multi-hop Personalized PageRank (PPR) Random Walk
+   * 4. MemoryBank Ebbinghaus Forgetting Curve with Recall Reinforcement
    */
   retrieveForQuery(
     query: string,
@@ -390,22 +565,39 @@ export class HierarchicalMemoryEngine {
     const recordAccess = options.recordAccess ?? true
     const qTokens = tokenizeBilingual(query)
     const qLower = query.toLowerCase()
+    const queryDenseVec = computeDenseSemanticEmbedding(query)
+    const queryEntities = new Set(extractKnowledgeGraphEntities(query))
 
-    // Compute IDF across current memory corpus
+    // Compute IDF across current memory corpus & build Entity-Memory KG index
     const docFreq = new Map<string, number>()
     const nodeTokenSets = new Map<string, Set<string>>()
+    const nodeEntitySets = new Map<string, Set<string>>()
+
     for (const node of this.nodes) {
-      const toks = new Set(
-        tokenizeBilingual(`${node.title} ${node.content} ${node.keywords.join(' ')} ${node.tags.join(' ')}`)
-      )
+      const fullText = `${node.title} ${node.content} ${node.keywords.join(' ')} ${node.tags.join(' ')}`
+      const toks = new Set(tokenizeBilingual(fullText))
       nodeTokenSets.set(node.id, toks)
       for (const t of toks) {
         docFreq.set(t, (docFreq.get(t) || 0) + 1)
       }
+      nodeEntitySets.set(
+        node.id,
+        new Set(extractKnowledgeGraphEntities(fullText, node.keywords, node.tags))
+      )
     }
 
     const N = Math.max(1, this.nodes.length)
-    const rawScores = new Map<string, { lexical: number; kwHit: boolean; retention: number }>()
+    const rawScores = new Map<
+      string,
+      {
+        sparseBm25: number
+        denseCosine: number
+        entityHitCount: number
+        hybridSeed: number
+        kwHit: boolean
+        retention: number
+      }
+    >()
 
     for (const node of this.nodes) {
       const toks = nodeTokenSets.get(node.id)!
@@ -417,17 +609,46 @@ export class HierarchicalMemoryEngine {
           bm25Like += Math.max(0.25, idf)
         }
       }
-      const normLex = qTokens.length > 0 ? Math.min(1.0, bm25Like / Math.max(2.2, qTokens.length * 0.45)) : 0
+      const sparseBm25 =
+        qTokens.length > 0 ? Math.min(1.0, bm25Like / Math.max(2.2, qTokens.length * 0.45)) : 0
+
+      const nodeDenseVec = computeDenseSemanticEmbedding(
+        `${node.title} ${node.content} ${node.keywords.join(' ')}`
+      )
+      const denseCosine = computeDenseCosineSimilarity(queryDenseVec, nodeDenseVec)
+
+      const nEntities = nodeEntitySets.get(node.id)!
+      let entityHitCount = 0
+      for (const qe of queryEntities) {
+        if (nEntities.has(qe)) entityHitCount++
+      }
+
       const kwHit = node.keywords.some((k) => k && qLower.includes(k.toLowerCase()))
       const retention = computeEbbinghausRetention(node)
+
+      // Hybrid Sparse + Dense seed score (55% Sparse BM25 + 45% Dense Semantic Cosine + Entity/Keyword boost)
+      const hybridSeed = Math.min(
+        1.0,
+        sparseBm25 * 0.55 +
+          denseCosine * 0.45 +
+          (kwHit ? 0.26 : 0) +
+          Math.min(0.18, entityHitCount * 0.06)
+      )
+
       rawScores.set(node.id, {
-        lexical: Math.min(1.0, normLex + (kwHit ? 0.28 : 0)),
+        sparseBm25,
+        denseCosine,
+        entityHitCount,
+        hybridSeed,
         kwHit,
         retention
       })
     }
 
-    // HippoRAG 1-hop Associative Spreading Activation & Strict Dynamic Relevance Gating
+    // HippoRAG (NeurIPS 2024) Multi-hop Personalized PageRank (PPR) over Entity-Memory Knowledge Graph:
+    // pi^{(k+1)} = (1 - damping) * p_0 + damping * W^T * pi^{(k)}
+    const pprScores = this.runHippoRAGPersonalizedPageRank(rawScores, nodeEntitySets)
+
     const finalRanked: Array<{
       node: MemoryNode
       score: number
@@ -437,33 +658,23 @@ export class HierarchicalMemoryEngine {
     for (const node of this.nodes) {
       const base = rawScores.get(node.id)!
       const meta = MEMORY_LAYER_META[node.layer]
+      const pprVal = pprScores.get(node.id) || 0
 
-      // 1. HippoRAG 1-hop associative boost from strongly-matched neighbors
-      let associativeBoost = 0
-      for (const neighborId of node.links) {
-        const nb = rawScores.get(neighborId)
-        if (nb && nb.lexical > 0.3) {
-          associativeBoost = Math.max(associativeBoost, nb.lexical * 0.25)
-        }
-      }
+      // Multi-hop PPR associative gain beyond direct seed score
+      const pprGain = Math.max(0, pprVal - base.hybridSeed * 0.55)
 
-      // 2. TiMem-Standard Strict Effective Relevance Gatekeeper
-      // In TiMem (ACL Findings), memory recall is precision-first.
-      // If a query has no significant lexical overlap, entity hit, or associative link,
-      // it MUST NOT trigger recall!
       const directRelevance = base.kwHit
-        ? Math.max(0.65, base.lexical + 0.35)
-        : base.lexical
+        ? Math.max(0.65, base.hybridSeed + 0.25)
+        : base.hybridSeed
 
-      const effectiveRelevance = directRelevance + associativeBoost
+      const effectiveRelevance = Math.min(1.0, directRelevance + pprGain * 0.45)
 
-      // Precision threshold: requires substantial semantic/lexical connection (>= 0.32)
-      // Completely blocks unrelated queries from accidentally recalling memories!
-      if (effectiveRelevance < 0.32) {
+      // Precision gatekeeper: requires meaningful hybrid semantic/lexical/PPR resonance (>= 0.30)
+      if (effectiveRelevance < 0.30) {
         continue
       }
 
-      // 3. Multi-factor Fusion Scoring (Relevance-Dominated: 70% relevance, 15% importance, 15% recency)
+      // Multi-factor Fusion Scoring (70% Hybrid+PPR Relevance, 15% Layer Prior Importance, 15% Ebbinghaus Retention)
       const importanceWeight = meta.priorWeight * (node.importance || 0.8)
       const retentionBonus = (base.retention || 0.5) * 0.15
 
@@ -472,16 +683,17 @@ export class HierarchicalMemoryEngine {
         effectiveRelevance * 0.70 + importanceWeight * 0.15 + retentionBonus
       )
 
-      let reason = 'TiMem 语义精准共振'
+      let reason = 'Dense+BM25 混合语义向量共振'
       if (base.kwHit) reason = `${node.layer} 核心关键词精准匹配`
-      else if (associativeBoost > 0.12) reason = 'HippoRAG 关联图谱联想激活'
+      else if (pprGain > 0.10) reason = 'HippoRAG 多跳图谱 PPR 随机游走激活'
+      else if (base.denseCosine >= 0.48 && base.sparseBm25 < 0.25)
+        reason = '128维同义概念簇稠密向量召回'
       else if (node.layer === 'L1') reason = 'L1 核心架构原则共振'
       else if (node.layer === 'L2') reason = 'L2 全局契约模型回调'
       else if (node.layer === 'L4') reason = 'L4 历史踩坑教训对齐'
       else if (node.layer === 'L5') reason = 'L5 细粒度偏好习惯对齐'
 
-      // Strict precision bar: only accept memories with high overall confidence (>= 0.48)
-      if (combinedScore >= 0.48) {
+      if (combinedScore >= 0.46) {
         finalRanked.push({
           node,
           score: Number(combinedScore.toFixed(2)),
@@ -516,6 +728,92 @@ export class HierarchicalMemoryEngine {
       score: s.score,
       matchReason: s.reason
     }))
+  }
+
+  /**
+   * HippoRAG (Bernal et al., NeurIPS 2024) Multi-hop Personalized PageRank (PPR) Engine:
+   * Constructs a transition graph over memory nodes connected via Zettelkasten links AND shared Knowledge Graph entities,
+   * then runs 3 power-iteration steps with teleportation vector p_0 initialized from hybrid query seeds.
+   */
+  private runHippoRAGPersonalizedPageRank(
+    rawScores: Map<
+      string,
+      {
+        sparseBm25: number
+        denseCosine: number
+        entityHitCount: number
+        hybridSeed: number
+        kwHit: boolean
+        retention: number
+      }
+    >,
+    nodeEntitySets: Map<string, Set<string>>
+  ): Map<string, number> {
+    const p0 = new Map<string, number>()
+    let seedSum = 0
+
+    for (const node of this.nodes) {
+      const s = rawScores.get(node.id)?.hybridSeed || 0
+      const seedVal = s >= 0.22 ? s : 0
+      p0.set(node.id, seedVal)
+      seedSum += seedVal
+    }
+
+    if (seedSum <= 1e-6) {
+      return p0
+    }
+
+    // Build weighted adjacency list (explicit Zettelkasten links + implicit KG entity co-occurrence bridges)
+    const adj = new Map<string, Array<{ targetId: string; weight: number }>>()
+    for (const node of this.nodes) {
+      const edges = new Map<string, number>()
+      for (const linkId of node.links) {
+        edges.set(linkId, 1.0)
+      }
+      const entA = nodeEntitySets.get(node.id)!
+      for (const other of this.nodes) {
+        if (other.id === node.id) continue
+        const entB = nodeEntitySets.get(other.id)!
+        let shared = 0
+        for (const e of entA) {
+          if (entB.has(e)) shared++
+        }
+        if (shared > 0) {
+          edges.set(other.id, (edges.get(other.id) || 0) + Math.min(0.8, shared * 0.25))
+        }
+      }
+      const list = Array.from(edges.entries()).map(([targetId, weight]) => ({ targetId, weight }))
+      adj.set(node.id, list)
+    }
+
+    // Power iteration: 3 multi-hop spreading steps with damping factor alpha = 0.50
+    const alpha = 0.50
+    let pi = new Map<string, number>(p0)
+
+    for (let iter = 0; iter < 3; iter++) {
+      const nextPi = new Map<string, number>()
+      for (const node of this.nodes) {
+        nextPi.set(node.id, (1 - alpha) * (p0.get(node.id) || 0))
+      }
+
+      for (const node of this.nodes) {
+        const currentMass = pi.get(node.id) || 0
+        if (currentMass <= 1e-5) continue
+        const neighbors = adj.get(node.id) || []
+        if (neighbors.length === 0) continue
+
+        const totalWeight = neighbors.reduce((acc, item) => acc + item.weight, 0)
+        if (totalWeight <= 1e-6) continue
+
+        for (const edge of neighbors) {
+          const transfer = alpha * currentMass * (edge.weight / totalWeight)
+          nextPi.set(edge.targetId, (nextPi.get(edge.targetId) || 0) + transfer)
+        }
+      }
+      pi = nextPi
+    }
+
+    return pi
   }
 
   /**

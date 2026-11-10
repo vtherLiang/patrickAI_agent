@@ -1720,6 +1720,24 @@ export function analyzeToolCallSemantics(toolCall: ToolCallItem): SemanticToolAn
       }
     }
 
+    case 'inspect_code_symbols': {
+      const filePath = String(args.file_path || '')
+      const fileName = getBaseName(filePath) || '.'
+      const symbolName = args.symbol_name ? String(args.symbol_name).trim() : ''
+      const lineCount = Math.max(1, outLines.length - 1)
+      return {
+        title: 'ACIProbe',
+        headerTarget: symbolName ? `${filePath}#${symbolName}` : filePath,
+        intentSummary:
+          explicitDesc || (symbolName ? `定位符号 ${symbolName} (${fileName})` : `提取 ${fileName} 符号大纲`),
+        digestTopic: explicitDesc || undefined,
+        outcomeDetail: `ACI 符号探针已解析 ${fileName}${symbolName ? ` -> ${symbolName}` : ''}（${lineCount} 项）`,
+        category: 'read',
+        fileName,
+        lineCount
+      }
+    }
+
     case 'search_files': {
       const query = args.query ? String(args.query).trim() : ''
       const pattern = args.file_pattern ? String(args.file_pattern).trim() : ''

@@ -1,6 +1,18 @@
-# Claude Code Studio (A + B + C 三位一体桌面端)
+# PatrickAI Agent · Claude Code Studio (A + B + C 三位一体桌面端)
 
-基于 Claude Code (`v2.1.88`) 架构思想的 **Clean-Room 原生桌面端重构版**，采用 **Electron + React + TypeScript + Vite + Tailwind CSS** 构建，支持 **100% OpenAI 兼容接口（DeepSeek / SiliconFlow / OpenRouter / OpenAI / 本地 Ollama）**。
+基于 Claude Code (`v2.1.88`) 架构思想的 **Clean-Room 原生桌面端重构版**，采用 **Electron + React + TypeScript + Vite + Tailwind CSS** 构建，支持 **100% OpenAI 兼容接口（DeepSeek / SiliconFlow / OpenRouter / OpenAI / Google Gemini / 本地 Ollama）**。
+
+## 📥 客户端下载 (Releases)
+
+可直接前往 [GitHub Releases](https://github.com/vtherLiang/patrickAI_agent/releases) 下载对应系统的安装包或免安装版：
+
+- **macOS 版本**：
+  - `PatrickAI-Agent-mac-arm64-1.0.0.dmg` / `.zip`（Apple Silicon M1/M2/M3/M4 芯片）
+  - `PatrickAI-Agent-mac-x64-1.0.0.dmg` / `.zip`（Intel 芯片）
+  - *注：首次打开若提示未签名应用，可在终端执行 `xattr -cr "/Applications/PatrickAI Agent.app"` 或在「系统设置 -> 隐私与安全性」中点击「仍要打开」。*
+- **Windows 版本**：
+  - `PatrickAI-Agent-Windows-Setup-1.0.0.exe`（Windows x64 安装程序）
+  - `PatrickAI-Agent-win-x64-1.0.0.zip`（Windows x64 绿色免安装版，解压即用）
 
 ## 核心架构模块
 
@@ -33,4 +45,9 @@ npm run dev
 # 类型检查与生产构建
 npm run typecheck
 npm run build
+
+# 打包桌面端安装包 (macOS / Windows)
+npm run dist:mac
+npm run dist:win
+npm run dist:all
 ```

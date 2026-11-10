@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import { execSync } from 'child_process'
 import {
   AIProviderConfig,
@@ -154,8 +155,15 @@ export class ConfigStore {
 
   constructor(defaultWorkspace: string) {
     this.appDir = path.join(defaultWorkspace, '.claude-desktop')
-    if (!fs.existsSync(this.appDir)) {
-      fs.mkdirSync(this.appDir, { recursive: true })
+    try {
+      if (!fs.existsSync(this.appDir)) {
+        fs.mkdirSync(this.appDir, { recursive: true })
+      }
+    } catch {
+      this.appDir = path.join(os.homedir(), '.claude-desktop')
+      if (!fs.existsSync(this.appDir)) {
+        fs.mkdirSync(this.appDir, { recursive: true })
+      }
     }
     this.configPath = path.join(this.appDir, 'config.json')
 
