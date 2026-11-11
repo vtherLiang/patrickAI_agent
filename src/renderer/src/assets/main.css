@@ -549,3 +549,17 @@
   overflow-wrap: break-word;
   word-break: break-word;
 }
+
+/* Codex Real PTY Terminal (Xterm.js) Exact Monospace Cell Alignment */
+.codex-xterm-container,
+.codex-xterm-container .xterm,
+.codex-xterm-container .xterm-rows {
+  letter-spacing: 0px !important;
+  font-variant-ligatures: none !important;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.codex-xterm-container .xterm-viewport {
+  scrollbar-width: thin;
+}

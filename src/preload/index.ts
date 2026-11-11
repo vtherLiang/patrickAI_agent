@@ -20,6 +20,7 @@ import {
   MemoryLayer,
   MemoryNode,
   ModelProviderPreset,
+  PtySessionInfo,
   ReadKnowledgeDocResult,
   RecalledMemoryItem,
   SaveKnowledgePdfPayload,
@@ -59,6 +60,20 @@ export interface ClaudeDesktopBridge {
   getGitStatus: () => Promise<GitStatusSummary>
   getGitDiff: (relativePath: string) => Promise<string>
   runQuickTerminal: (command: string) => Promise<string>
+  createPty: (options?: {
+    id?: string
+    title?: string
+    cwd?: string
+    cols?: number
+    rows?: number
+    initialCommand?: string
+  }) => Promise<PtySessionInfo>
+  writePty: (payload: { id: string; data: string }) => Promise<boolean>
+  resizePty: (payload: { id: string; cols: number; rows: number }) => Promise<boolean>
+  killPty: (id: string) => Promise<boolean>
+  listPty: () => Promise<PtySessionInfo[]>
+  loadThreads: () => Promise<unknown[]>
+  saveThreads: (threads: unknown[]) => Promise<boolean>
   pickAttachments: () => Promise<ChatAttachment[]>
   parseAttachmentPaths: (paths: string[]) => Promise<ChatAttachment[]>
   parseDataAttachment: (payload: {
@@ -196,6 +211,13 @@ const api: ClaudeDesktopBridge = {
   getGitStatus: () => ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_STATUS),
   getGitDiff: (relativePath) => ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_DIFF, relativePath),
   runQuickTerminal: (command) => ipcRenderer.invoke(IPC_CHANNELS.RUN_QUICK_TERMINAL, command),
+  createPty: (options) => ipcRenderer.invoke(IPC_CHANNELS.PTY_CREATE, options),
+  writePty: (payload) => ipcRenderer.invoke(IPC_CHANNELS.PTY_WRITE, payload),
+  resizePty: (payload) => ipcRenderer.invoke(IPC_CHANNELS.PTY_RESIZE, payload),
+  killPty: (id) => ipcRenderer.invoke(IPC_CHANNELS.PTY_KILL, id),
+  listPty: () => ipcRenderer.invoke(IPC_CHANNELS.PTY_LIST),
+  loadThreads: () => ipcRenderer.invoke(IPC_CHANNELS.THREADS_LOAD),
+  saveThreads: (threads) => ipcRenderer.invoke(IPC_CHANNELS.THREADS_SAVE, threads),
   pickAttachments: () => ipcRenderer.invoke(IPC_CHANNELS.PICK_ATTACHMENTS),
   parseAttachmentPaths: (paths) => ipcRenderer.invoke(IPC_CHANNELS.PARSE_ATTACHMENT_PATHS, paths),
   parseDataAttachment: (payload) =>

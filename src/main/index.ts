@@ -51,6 +51,8 @@ import {
   KnowledgeBaseManager,
   resolveDefaultAppSupportBase
 } from './files/KnowledgeBaseManager'
+import { PtyTerminalManager } from './terminal/PtyTerminalManager'
+import { ThreadStore, StoredThreadRecord } from './store/ThreadStore'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -145,6 +147,8 @@ const queryEngine = new QueryEngine(
 
 const dreamEngine = new DreamEngine(configStore, llmClient, memoryEngine, broadcastToRenderer)
 const kairosWatcher = new KairosWatcher(configStore, toolRegistry, broadcastToRenderer)
+const ptyTerminalManager = new PtyTerminalManager(broadcastToRenderer)
+const threadStore = new ThreadStore()
 
 function buildFileTree(rootDir: string, currentDir = rootDir, depth = 0): FileTreeNode[] {
   if (depth > 3) return []
@@ -646,6 +650,59 @@ function registerIpcHandlers(): void {
     )
   })
 
+  // Real PTY Interactive Terminal Sessions (Codex-Style Side Terminal)
+  ipcMain.handle(
+    IPC_CHANNELS.PTY_CREATE,
+    (
+      _e,
+      options?: {
+        id?: string
+        title?: string
+        cwd?: string
+        cols?: number
+        rows?: number
+        initialCommand?: string
+      }
+    ) => {
+      const cfg = configStore.getConfig()
+      return ptyTerminalManager.createSession({
+        ...options,
+        cwd: options?.cwd || cfg.workspaceDir
+      })
+    }
+  )
+
+  ipcMain.handle(
+    IPC_CHANNELS.PTY_WRITE,
+    (_e, payload: { id: string; data: string }) => {
+      return ptyTerminalManager.write(payload.id, payload.data)
+    }
+  )
+
+  ipcMain.handle(
+    IPC_CHANNELS.PTY_RESIZE,
+    (_e, payload: { id: string; cols: number; rows: number }) => {
+      return ptyTerminalManager.resize(payload.id, payload.cols, payload.rows)
+    }
+  )
+
+  ipcMain.handle(IPC_CHANNELS.PTY_KILL, (_e, id: string) => {
+    return ptyTerminalManager.kill(id)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.PTY_LIST, () => {
+    return ptyTerminalManager.listSessions()
+  })
+
+  // Persistent Disk-Backed Conversation Threads
+  ipcMain.handle(IPC_CHANNELS.THREADS_LOAD, () => {
+    return threadStore.loadThreads()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.THREADS_SAVE, (_e, threads: StoredThreadRecord[]) => {
+    return threadStore.saveThreads(threads)
+  })
+
   // Codex Left Sidebar: Skills Hub
   ipcMain.handle(IPC_CHANNELS.GET_SKILLS, () => skillManager.listSkills())
   ipcMain.handle(IPC_CHANNELS.TOGGLE_SKILL, (_e, skillId: string) =>
@@ -1135,6 +1192,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  ptyTerminalManager.disposeAll()
   kairosWatcher.stopAll()
   globalShortcut.unregisterAll()
 })

@@ -298,51 +298,104 @@ const PERMISSION_MODES_ORDER: AgentPermissionMode[] = [
   'bypassPermissions'
 ]
 
-function loadSavedThreads(defaultWorkspace: string): CodexThread[] {
+function normalizeCodexThread(t: CodexThread, defaultWorkspace: string): CodexThread {
+  const threadWithDefaults: CodexThread = {
+    ...t,
+    workspaceDir: t.workspaceDir || defaultWorkspace,
+    messages: Array.isArray(t.messages) ? t.messages : [],
+    sideChatMessages: Array.isArray(t.sideChatMessages) ? t.sideChatMessages : [],
+    sideChatUpdatedAt: typeof t.sideChatUpdatedAt === 'number' ? t.sideChatUpdatedAt : undefined,
+    sideChatExpired: Boolean(t.sideChatExpired),
+    isSideChatOpen: Boolean(t.isSideChatOpen)
+  }
+  return sanitizeThreadSideChat(threadWithDefaults)
+}
+
+function createInitialThread(defaultWorkspace: string): CodexThread {
+  return {
+    id: 'thread_initial',
+    title: '新任务线程',
+    workspaceDir: defaultWorkspace,
+    messages: [],
+    sideChatMessages: [],
+    sideChatUpdatedAt: undefined,
+    sideChatExpired: false,
+    status: 'idle',
+    pinned: false,
+    updatedAt: Date.now(),
+    toolCount: 0
+  }
+}
+
+function isPlaceholderInitialThread(t: CodexThread): boolean {
+  return (
+    t.id === 'thread_initial' &&
+    t.title === '新任务线程' &&
+    (!t.messages || t.messages.length === 0) &&
+    (!t.sideChatMessages || t.sideChatMessages.length === 0)
+  )
+}
+
+function loadLocalSavedThreads(defaultWorkspace: string): CodexThread[] {
   try {
     const raw =
       localStorage.getItem(THREADS_STORAGE_KEY) || localStorage.getItem(LEGACY_THREADS_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((t: CodexThread) => {
-          const threadWithDefaults: CodexThread = {
-            ...t,
-            workspaceDir: t.workspaceDir || defaultWorkspace,
-            sideChatMessages: Array.isArray(t.sideChatMessages) ? t.sideChatMessages : [],
-            sideChatUpdatedAt:
-              typeof t.sideChatUpdatedAt === 'number' ? t.sideChatUpdatedAt : undefined,
-            sideChatExpired: Boolean(t.sideChatExpired),
-            isSideChatOpen: Boolean(t.isSideChatOpen)
-          }
-          return sanitizeThreadSideChat(threadWithDefaults)
-        })
+        return parsed.map((t: CodexThread) => normalizeCodexThread(t, defaultWorkspace))
       }
     }
   } catch {
     // ignore
   }
-  return [
-    {
-      id: 'thread_initial',
-      title: '新任务线程',
-      workspaceDir: defaultWorkspace,
-      messages: [],
-      sideChatMessages: [],
-      sideChatUpdatedAt: undefined,
-      sideChatExpired: false,
-      status: 'idle',
-      pinned: false,
-      updatedAt: Date.now(),
-      toolCount: 0
+  return []
+}
+
+function mergeThreads(
+  diskThreads: CodexThread[],
+  localThreads: CodexThread[],
+  defaultWorkspace: string
+): CodexThread[] {
+  const byId = new Map<string, CodexThread>()
+  const consider = (raw: CodexThread): void => {
+    if (!raw || typeof raw.id !== 'string' || !raw.id) return
+    const normalized = normalizeCodexThread(raw, defaultWorkspace)
+    const existing = byId.get(normalized.id)
+    if (!existing) {
+      byId.set(normalized.id, normalized)
+      return
     }
-  ]
+    const existingMsgs = existing.messages.length
+    const nextMsgs = normalized.messages.length
+    if (
+      nextMsgs > existingMsgs ||
+      (nextMsgs === existingMsgs && (normalized.updatedAt || 0) > (existing.updatedAt || 0))
+    ) {
+      byId.set(normalized.id, normalized)
+    }
+  }
+
+  for (const t of diskThreads) consider(t)
+  for (const t of localThreads) consider(t)
+
+  const merged = Array.from(byId.values())
+  const hasRealThreads = merged.some((t) => !isPlaceholderInitialThread(t))
+  const filtered = hasRealThreads ? merged.filter((t) => !isPlaceholderInitialThread(t)) : merged
+  filtered.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return filtered.slice(0, 60)
+}
+
+function loadSavedThreads(defaultWorkspace: string): CodexThread[] {
+  const local = loadLocalSavedThreads(defaultWorkspace)
+  return local.length > 0 ? local : [createInitialThread(defaultWorkspace)]
 }
 
 let activeStreamUnsubscribe: (() => void) | null = null
+let diskPersistTimer: ReturnType<typeof setTimeout> | null = null
+let pendingDiskThreads: CodexThread[] | null = null
 
-function persistThreads(threads: CodexThread[]): void {
-  const sliced = threads.slice(0, 60)
+function writeThreadsToLocalStorage(sliced: CodexThread[]): void {
   try {
     localStorage.setItem(THREADS_STORAGE_KEY, JSON.stringify(sliced))
   } catch {
@@ -368,6 +421,39 @@ function persistThreads(threads: CodexThread[]): void {
       // ignore
     }
   }
+}
+
+async function flushThreadsToDiskNow(threads?: CodexThread[]): Promise<void> {
+  if (diskPersistTimer) {
+    clearTimeout(diskPersistTimer)
+    diskPersistTimer = null
+  }
+  const target = threads ? threads.slice(0, 60) : pendingDiskThreads
+  pendingDiskThreads = null
+  if (!target) return
+  try {
+    await window.claudeDesktop?.saveThreads?.(target)
+  } catch {
+    // ignore disk persistence failures cleanly
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    void flushThreadsToDiskNow()
+  })
+}
+
+function persistThreads(threads: CodexThread[]): void {
+  const sliced = threads.slice(0, 60)
+  writeThreadsToLocalStorage(sliced)
+  pendingDiskThreads = sliced
+  if (diskPersistTimer) {
+    clearTimeout(diskPersistTimer)
+  }
+  diskPersistTimer = setTimeout(() => {
+    void flushThreadsToDiskNow()
+  }, 250)
 }
 
 /**
@@ -1770,7 +1856,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       gitStatus,
       skills,
       mcpServers,
-      kbState
+      kbState,
+      diskThreadsRaw
     ] = await Promise.all([
       safeBridgeCall<{ config: AppConfig | null; presets: ModelProviderPreset[] }>(
         () => window.claudeDesktop?.getConfig?.(),
@@ -1800,7 +1887,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       safeBridgeCall(
         () => window.claudeDesktop?.listKnowledgeDocs?.(),
         { storageDir: '', docs: [] as KnowledgeDocItem[] }
-      )
+      ),
+      safeBridgeCall(() => window.claudeDesktop?.loadThreads?.(), [] as unknown[])
     ])
 
     const config = configBundle.config
@@ -1810,7 +1898,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().threads.find((t) => Boolean(t.workspaceDir))?.workspaceDir ||
       ''
 
-    const initialThreads = loadSavedThreads(workspaceDir)
+    const diskThreads = Array.isArray(diskThreadsRaw) ? (diskThreadsRaw as CodexThread[]) : []
+    const localThreads = loadLocalSavedThreads(workspaceDir)
+    const mergedThreads = mergeThreads(diskThreads, localThreads, workspaceDir)
+    const initialThreads =
+      mergedThreads.length > 0 ? mergedThreads : [createInitialThread(workspaceDir)]
+
+    writeThreadsToLocalStorage(initialThreads)
+    if (localThreads.length > 0 || diskThreads.length !== initialThreads.length) {
+      void flushThreadsToDiskNow(initialThreads)
+    }
+
     const activeId = initialThreads[0].id
 
     if (sessionState.messages && sessionState.messages.length > 0) {

@@ -12,17 +12,13 @@ import {
   AtSign,
   Copy,
   Check,
-  Play,
-  Trash2,
-  ShieldCheck,
   Globe,
-  Eye,
-  ExternalLink
+  Eye
 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
-import { FileTreeNode, GitFileChange, InspectorTab } from '@shared/types'
-import { maskSensitiveSecrets } from '@shared/secretMasker'
+import { FileTreeNode, GitFileChange } from '@shared/types'
 import { CodexBrowserPreview } from './CodexBrowserPreview'
+import { CodexTerminalPanel } from './CodexTerminalPanel'
 
 function filterTreeNodes(nodes: FileTreeNode[], query: string): FileTreeNode[] {
   if (!query.trim()) return nodes
@@ -151,7 +147,6 @@ export const CodexRightInspector: React.FC = () => {
     isInspectorResizing,
     setIsInspectorResizing,
     terminalLogs,
-    clearTerminalLogs,
     fileTree,
     selectedFilePreview,
     gitStatus,
@@ -162,16 +157,12 @@ export const CodexRightInspector: React.FC = () => {
     closeDiffPreview,
     refreshFileTree,
     refreshGitStatus,
-    runQuickTerminalCommand,
     setDraftComposerText,
     setWorkbenchSubView,
-    openFileInBrowserPreview,
-    isSideChatMode
+    openFileInBrowserPreview
   } = useAppStore()
 
   const [fileFilter, setFileFilter] = useState('')
-  const [quickCmd, setQuickCmd] = useState('')
-  const [runningCmd, setRunningCmd] = useState(false)
   const [copiedFile, setCopiedFile] = useState(false)
 
   const filteredTree = useMemo(
@@ -181,18 +172,6 @@ export const CodexRightInspector: React.FC = () => {
 
   const tabIndex =
     inspectorTab === 'terminal' ? 0 : inspectorTab === 'files' ? 1 : inspectorTab === 'changes' ? 2 : 3
-
-  const handleRunQuickCmd = async (): Promise<void> => {
-    if (!quickCmd.trim() || runningCmd) return
-    const cmd = quickCmd.trim()
-    setQuickCmd('')
-    setRunningCmd(true)
-    try {
-      await runQuickTerminalCommand(cmd)
-    } finally {
-      setRunningCmd(false)
-    }
-  }
 
   const handleReferenceInComposer = (relPath: string, extraInstruction?: string): void => {
     setWorkbenchSubView('chat')
@@ -331,75 +310,16 @@ export const CodexRightInspector: React.FC = () => {
           </div>
         </div>
 
-        {/* TAB 1: TERMINAL (Streaming Output + Interactive Codex Quick Shell Input) */}
-        {inspectorTab === 'terminal' && (
-          <div className="flex-1 flex flex-col overflow-hidden bg-[#F9F9FB]">
-            {/* Terminal Security & Management Toolbar */}
-            <div className="px-3 py-1.5 bg-[#F2F2F7] border-b border-black/[0.05] flex items-center justify-between text-[10.5px]">
-              <div className="flex items-center gap-1.5 text-[#34c759]">
-                <ShieldCheck className="w-3 h-3" />
-                <span className="font-medium text-[#1d1d1f]">终端会话已连接</span>
-                <span className="text-[#86868b] hidden sm:inline">· 敏感凭据自动脱敏已开启</span>
-              </div>
-              {terminalLogs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => clearTerminalLogs()}
-                  className="px-2 py-0.5 rounded text-[10.5px] text-[#6e6e73] hover:text-[#ff3b30] hover:bg-black/[0.05] transition-colors flex items-center gap-1 cursor-pointer font-sans"
-                  title="彻底清空当前工作台终端面板的所有输出"
-                >
-                  <Trash2 className="w-2.5 h-2.5" />
-                  <span>清空面板</span>
-                </button>
-              )}
-            </div>
-
-            <div className="flex-1 p-3.5 font-mono text-[11px] overflow-y-auto space-y-1">
-              {terminalLogs.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-[#86868b] text-[12px] text-center px-6 gap-2">
-                  <span>执行终端指令时，实时输出将在此滚动呈现</span>
-                  <span className="text-[11px] text-[#aeaeb2]">
-                    支持执行常规命令或输入 clear 清空面板
-                  </span>
-                </div>
-              ) : (
-                terminalLogs.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`whitespace-pre-wrap break-all leading-relaxed ${
-                      item.stream === 'stderr' ? 'text-[#C96A00]' : 'text-[#1d1d1f]'
-                    }`}
-                  >
-                    {maskSensitiveSecrets(item.text)}
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Interactive Quick Command Runner */}
-            <div className="p-2.5 border-t border-black/[0.06] bg-white flex items-center gap-1.5">
-              <span className="font-mono text-[12px] text-[#0071e3] pl-1.5 select-none">$</span>
-              <input
-                type="text"
-                value={quickCmd}
-                onChange={(e) => setQuickCmd(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleRunQuickCmd()
-                }}
-                placeholder="在当前工作区执行快捷命令（输入 clear 清屏）..."
-                className="flex-1 bg-transparent text-[11.5px] font-mono text-[#1d1d1f] placeholder-[#86868b] focus:outline-none"
-              />
-              <button
-                type="button"
-                disabled={!quickCmd.trim() || runningCmd}
-                onClick={handleRunQuickCmd}
-                className="apple-press p-1.5 rounded-lg bg-[#F2F2F7] hover:bg-[#E5E5EA] disabled:opacity-40 text-[#1d1d1f]"
-              >
-                <Play className="w-3 h-3 fill-current" />
-              </button>
-            </div>
-          </div>
-        )}
+        {/* TAB 1: REAL INTERACTIVE CODEX PTY TERMINAL (Kept mounted across tab switches so running TUI sessions like `claude` stay alive) */}
+        <div
+          className={
+            inspectorTab === 'terminal'
+              ? 'flex-1 flex flex-col overflow-hidden'
+              : 'hidden'
+          }
+        >
+          <CodexTerminalPanel isVisible={isInspectorOpen && inspectorTab === 'terminal'} />
+        </div>
 
         {/* TAB 2: PROJECT FILES (Screenshot Clean Tree + Codex Code Viewer with Line Numbers & @Reference) */}
         {inspectorTab === 'files' && (

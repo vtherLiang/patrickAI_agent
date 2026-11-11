@@ -449,12 +449,28 @@ export interface FileTreeNode {
   children?: FileTreeNode[]
 }
 
+export interface PtySessionInfo {
+  id: string
+  title: string
+  cwd: string
+  shell: string
+  pid?: number
+  cols: number
+  rows: number
+  createdAt: number
+  exited?: boolean
+  exitCode?: number | null
+  replayBuffer?: string
+}
+
 export interface StreamUpdatePayload {
   type:
     | 'messages_updated'
     | 'streaming_delta'
     | 'tool_approval_required'
     | 'terminal_output'
+    | 'pty_data'
+    | 'pty_exit'
     | 'token_stats'
     | 'swarm_updated'
     | 'dream_updated'
@@ -472,6 +488,8 @@ export interface StreamUpdatePayload {
   sideChatDelta?: { content?: string; reasoning?: string }
   pendingApproval?: ToolCallItem
   terminalLine?: { commandId: string; text: string; stream: 'stdout' | 'stderr' }
+  ptyData?: { sessionId: string; data: string }
+  ptyExit?: { sessionId: string; exitCode: number | null }
   tokenStats?: TokenUsageStats
   swarmState?: SwarmRunState
   dreamLogs?: DreamLogEntry[]

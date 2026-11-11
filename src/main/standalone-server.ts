@@ -30,6 +30,8 @@ import {
   KnowledgeBaseManager,
   resolveDefaultAppSupportBase
 } from './files/KnowledgeBaseManager'
+import { PtyTerminalManager } from './terminal/PtyTerminalManager'
+import { ThreadStore } from './store/ThreadStore'
 import { execFile } from 'child_process'
 
 const PORT = Number(process.env.PORT) || 3721
@@ -84,6 +86,8 @@ const queryEngine = new QueryEngine(
 )
 
 const dreamEngine = new DreamEngine(configStore, llmClient, memoryEngine, broadcastToRenderer)
+const ptyTerminalManager = new PtyTerminalManager(broadcastToRenderer)
+const threadStore = new ThreadStore()
 
 function buildFileTree(rootDir: string, currentDir = rootDir, depth = 0): FileTreeNode[] {
   if (depth > 3) return []
@@ -211,6 +215,29 @@ async function handleRpc(channel: string, arg: any): Promise<any> {
         callId
       )
     }
+    case IPC_CHANNELS.PTY_CREATE: {
+      const cfg = configStore.getConfig()
+      return ptyTerminalManager.createSession({
+        ...(arg || {}),
+        cwd: arg?.cwd || cfg.workspaceDir
+      })
+    }
+    case IPC_CHANNELS.PTY_WRITE:
+      return ptyTerminalManager.write(String(arg?.id || ''), String(arg?.data || ''))
+    case IPC_CHANNELS.PTY_RESIZE:
+      return ptyTerminalManager.resize(
+        String(arg?.id || ''),
+        Number(arg?.cols || 80),
+        Number(arg?.rows || 24)
+      )
+    case IPC_CHANNELS.PTY_KILL:
+      return ptyTerminalManager.kill(String(arg || ''))
+    case IPC_CHANNELS.PTY_LIST:
+      return ptyTerminalManager.listSessions()
+    case IPC_CHANNELS.THREADS_LOAD:
+      return threadStore.loadThreads()
+    case IPC_CHANNELS.THREADS_SAVE:
+      return threadStore.saveThreads(Array.isArray(arg) ? arg : [])
     case IPC_CHANNELS.GET_SKILLS:
       return skillManager.listSkills()
     case IPC_CHANNELS.TOGGLE_SKILL:
