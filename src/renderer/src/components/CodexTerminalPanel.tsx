@@ -80,6 +80,16 @@ const LIGHT_TERMINAL_THEME: ITheme = {
 
 const TERMINAL_THEME_STORAGE_KEY = 'codex_pty_terminal_theme_v1'
 
+function getSessionTabLabel(session: PtySessionInfo, index: number): string {
+  const shellLabel = session.shell || 'zsh'
+  const rawTitle = session.title?.trim()
+  const escapedShell = shellLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  if (rawTitle && !new RegExp(`^${escapedShell}\\s*#\\d+$`, 'i').test(rawTitle)) {
+    return rawTitle
+  }
+  return `${shellLabel} #${index + 1}`
+}
+
 export const CodexTerminalPanel: React.FC<{ isVisible: boolean }> = ({ isVisible }) => {
   const { config, terminalLogs, clearTerminalLogs, isInspectorResizing, inspectorWidth } =
     useAppStore()
@@ -100,10 +110,13 @@ export const CodexTerminalPanel: React.FC<{ isVisible: boolean }> = ({ isVisible
   const instancesRef = useRef<Map<string, ClientPtyInstance>>(new Map())
   const viewportHostRef = useRef<HTMLDivElement | null>(null)
   const activeSessionIdRef = useRef<string | null>(null)
+  const sessionsRef = useRef<PtySessionInfo[]>([])
+  const closingIdsRef = useRef<Set<string>>(new Set())
   const initializedRef = useRef<boolean>(false)
   const lastSyncedWorkspaceRef = useRef<string>('')
 
   activeSessionIdRef.current = activeSessionId
+  sessionsRef.current = sessions
 
   const fitSession = useCallback((sessionId: string) => {
     const inst = instancesRef.current.get(sessionId)
@@ -352,26 +365,32 @@ export const CodexTerminalPanel: React.FC<{ isVisible: boolean }> = ({ isVisible
 
   const handleCloseSession = async (sessionId: string, e?: React.MouseEvent): Promise<void> => {
     e?.stopPropagation()
-    await window.claudeDesktop?.killPty?.(sessionId)
-    const inst = instancesRef.current.get(sessionId)
-    if (inst) {
-      try {
-        inst.term.dispose()
-      } catch {
-        // ignore
-      }
-      instancesRef.current.delete(sessionId)
-    }
+    if (sessionsRef.current.length <= 1 || closingIdsRef.current.has(sessionId)) return
+    const nonClosingRemaining = sessionsRef.current.filter(
+      (s) => s.id !== sessionId && !closingIdsRef.current.has(s.id)
+    )
+    if (nonClosingRemaining.length === 0) return
 
-    const remaining = sessions.filter((s) => s.id !== sessionId)
-    if (remaining.length === 0) {
-      setSessions([])
-      await spawnNewSession({ cwd: config?.workspaceDir })
-    } else {
-      setSessions(remaining)
-      if (activeSessionId === sessionId) {
-        setActiveSessionId(remaining[remaining.length - 1].id)
+    closingIdsRef.current.add(sessionId)
+    try {
+      await window.claudeDesktop?.killPty?.(sessionId)
+      const inst = instancesRef.current.get(sessionId)
+      if (inst) {
+        try {
+          inst.term.dispose()
+        } catch {
+          // ignore
+        }
+        instancesRef.current.delete(sessionId)
       }
+
+      const remainingSnapshot = sessionsRef.current.filter((s) => s.id !== sessionId)
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId))
+      if (activeSessionIdRef.current === sessionId && remainingSnapshot.length > 0) {
+        setActiveSessionId(remainingSnapshot[remainingSnapshot.length - 1].id)
+      }
+    } finally {
+      closingIdsRef.current.delete(sessionId)
     }
   }
 
@@ -475,15 +494,17 @@ export const CodexTerminalPanel: React.FC<{ isVisible: boolean }> = ({ isVisible
                     s.exited ? 'bg-[#8e8e93]' : 'bg-[#34c759]'
                   }`}
                 />
-                <span className="truncate max-w-[92px]">{s.title || `zsh #${idx + 1}`}</span>
-                <button
-                  type="button"
-                  onClick={(e) => handleCloseSession(s.id, e)}
-                  title="关闭此终端会话"
-                  className="opacity-60 group-hover:opacity-100 hover:text-[#ff3b30] p-0.5 rounded transition-opacity"
-                >
-                  <X className="w-2.5 h-2.5" />
-                </button>
+                <span className="truncate max-w-[92px]">{getSessionTabLabel(s, idx)}</span>
+                {sessions.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleCloseSession(s.id, e)}
+                    title="关闭此终端会话"
+                    className="opacity-60 group-hover:opacity-100 hover:text-[#ff3b30] p-0.5 rounded transition-opacity"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                )}
               </div>
             )
           })}

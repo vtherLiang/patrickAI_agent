@@ -1,6 +1,6 @@
 {
   "name": "patrick-ai-agent",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "PatrickAI Agent — Clean-room desktop implementation of Claude Code architecture (Workbench + Coordinator Swarm + KAIROS/Dream Daemon)",
   "author": "vtherLiang",
   "homepage": "https://github.com/vtherLiang/patrickAI_agent",

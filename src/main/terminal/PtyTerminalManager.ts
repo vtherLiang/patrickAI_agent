@@ -289,7 +289,7 @@ export class PtyTerminalManager {
     }
 
     const { shell, args, label } = resolveInteractiveShell()
-    const title = options?.title || `${label} #${this.counter}`
+    const title = options?.title || ''
 
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) {
