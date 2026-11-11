@@ -484,7 +484,7 @@ export const CodexSideChatDrawer: React.FC = () => {
                         <div className="whitespace-pre-wrap">
                           {(() => {
                             const linkRegex =
-                              /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`https?:\/\/[^`\n]+`|`www\.[^`\n]+`|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?)/g
+                              /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`https?:\/\/[^`\n]+`|`www\.[^`\n]+`|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+(?:[/?#][^\s<>'")]*)?)/g
                             const chunks = msg.content.split(linkRegex)
                             const stripTrailing = (raw: string) => {
                               const trailMatch = raw.match(/[。，、；：！？）】》”’」』\.\,\;\:\!\?\)]+$/)
@@ -494,6 +494,7 @@ export const CodexSideChatDrawer: React.FC = () => {
                               return { clean: raw, trail: '' }
                             }
                             return chunks.map((chunk, cIdx) => {
+                              if (!chunk) return null
                               if (chunk.startsWith('[') && chunk.includes('](')) {
                                 const splitIdx = chunk.indexOf('](')
                                 const label = chunk.slice(1, splitIdx)

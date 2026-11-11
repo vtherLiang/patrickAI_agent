@@ -453,6 +453,9 @@ function parseEnvironmentBody(body: string): MathNode[][][] {
 }
 
 function parseAtom(src: string, pos: number): { node: MathNode; nextPos: number } {
+  if (pos >= src.length) {
+    return { node: { type: 'ident', text: '' }, nextPos: src.length }
+  }
   const ch = src[pos]
 
   // Braced group `{ ... }`

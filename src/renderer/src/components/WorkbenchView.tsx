@@ -743,7 +743,7 @@ export const WorkbenchView: React.FC = () => {
 
     // Tokenize for links (both [title](url), `code-wrapped url`, bare https?://..., www...)
     const linkRegex =
-      /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`https?:\/\/[^`\n]+`|`www\.[^`\n]+`|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?)/g
+      /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|`https?:\/\/[^`\n]+`|`www\.[^`\n]+`|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+(?:[/?#][^\s<>'")]*)?)/g
     const chunks = content.split(linkRegex)
 
     const stripTrailing = (raw: string) => {
@@ -755,6 +755,7 @@ export const WorkbenchView: React.FC = () => {
     }
 
     return chunks.map((chunk, chunkIdx) => {
+      if (!chunk) return null
       if (chunk.startsWith('[') && chunk.includes('](')) {
         const splitIdx = chunk.indexOf('](')
         const label = chunk.slice(1, splitIdx)
@@ -867,6 +868,7 @@ export const WorkbenchView: React.FC = () => {
       return (
         <React.Fragment key={chunkIdx}>
           {parts.map((part, i) => {
+            if (!part) return null
             if (part.startsWith('@')) {
               const nameOrId = part.slice(1).toLowerCase()
               const found = matchedSkills.find(
