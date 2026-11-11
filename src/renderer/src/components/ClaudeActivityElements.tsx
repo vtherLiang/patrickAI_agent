@@ -3,6 +3,8 @@ import { ChevronRight, Sparkles, Copy, Check, ExternalLink } from 'lucide-react'
 import { MemoryLayer, RecalledMemoryItem, ToolCallItem } from '@shared/types'
 import { maskSensitiveSecrets } from '@shared/secretMasker'
 import { useAppStore } from '../store/useAppStore'
+import { LatexMathFormula } from '../utils/latexMathRenderer'
+import { isLikelyInlineMathDollar } from '../utils/latexMathUtils'
 
 /**
  * Exact glyph cycle from Claude Code v2.1.88 leaked source (`CLAUDE_ACTIVITY_GLYPHS`)
@@ -971,12 +973,12 @@ function extractUrlIfPureLink(
 }
 
 /**
- * Inline token parser for Claude Code Terminal Output (`code`, **bold**, *italic*, [link](url), raw URLs)
+ * Inline token parser for Claude Code Terminal Output (`code`, LaTeX math, **bold**, *italic*, [link](url), raw URLs)
  */
 function renderInlineTerminalText(text: string, contextFullText?: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   const tokenRegex =
-    /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?|\b[a-zA-Z0-9_.-]+\.(?:html?|php|jsp|asp|aspx)(?:\?[^\s<>'")]+)?|\*[^*\s][^*\n]*\*)/g
+    /(`[^`\n]+`|\\\[[^\n]+?\\\]|\$\$[^\n]+?\$\$|\\\(.+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$|\*\*[^*\n]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>'")]+|\bwww\.[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+([/?#][^\s<>'")]*)?|\b[a-zA-Z0-9_.-]+\.(?:html?|php|jsp|asp|aspx)(?:\?[^\s<>'")]+)?|\*[^*\s][^*\n]*\*)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
   let keySeq = 0
@@ -986,7 +988,23 @@ function renderInlineTerminalText(text: string, contextFullText?: string): React
       nodes.push(text.slice(lastIndex, match.index))
     }
     const raw = match[0]
-    if (raw.startsWith('`') && raw.endsWith('`')) {
+    if (raw.startsWith('\\(') && raw.endsWith('\\)')) {
+      const inner = raw.slice(2, -2)
+      nodes.push(<LatexMathFormula key={`im_${keySeq++}`} latex={inner} displayMode={false} />)
+    } else if (raw.startsWith('\\[') && raw.endsWith('\\]')) {
+      const inner = raw.slice(2, -2)
+      nodes.push(<LatexMathFormula key={`idm_${keySeq++}`} latex={inner} displayMode={false} />)
+    } else if (raw.startsWith('$$') && raw.endsWith('$$') && raw.length > 4) {
+      const inner = raw.slice(2, -2)
+      nodes.push(<LatexMathFormula key={`ddm_${keySeq++}`} latex={inner} displayMode={false} />)
+    } else if (raw.startsWith('$') && raw.endsWith('$') && raw.length > 2) {
+      const inner = raw.slice(1, -1)
+      if (isLikelyInlineMathDollar(inner)) {
+        nodes.push(<LatexMathFormula key={`dm_${keySeq++}`} latex={inner} displayMode={false} />)
+      } else {
+        nodes.push(raw)
+      }
+    } else if (raw.startsWith('`') && raw.endsWith('`')) {
       const codeContent = raw.slice(1, -1)
       const linkInfo = extractUrlIfPureLink(codeContent, text, contextFullText)
 
@@ -1025,7 +1043,7 @@ function renderInlineTerminalText(text: string, contextFullText?: string): React
     } else if (raw.startsWith('**') && raw.endsWith('**')) {
       nodes.push(
         <strong key={`b_${keySeq++}`} className="font-bold text-[#000000]">
-          {raw.slice(2, -2)}
+          {renderInlineTerminalText(raw.slice(2, -2), contextFullText)}
         </strong>
       )
     } else if (raw.startsWith('[') && raw.includes('](')) {
@@ -1142,7 +1160,7 @@ function renderInlineTerminalText(text: string, contextFullText?: string): React
     } else if (raw.startsWith('*') && raw.endsWith('*')) {
       nodes.push(
         <em key={`em_${keySeq++}`} className="italic text-[#3a3a3c]">
-          {raw.slice(1, -1)}
+          {renderInlineTerminalText(raw.slice(1, -1), contextFullText)}
         </em>
       )
     } else {
@@ -1231,6 +1249,87 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
         blocks.push(<hr key={`hr_${segIdx}_${i}`} className="my-4 border-t border-black/[0.08]" />)
         i++
         continue
+      }
+
+      // Display Math Block (`\[ ... \]` or `$$ ... $$`, single-line or multi-line)
+      if (trimmed.startsWith('\\[') || trimmed.startsWith('$$')) {
+        const isBracketMath = trimmed.startsWith('\\[')
+        const closeDelim = isBracketMath ? '\\]' : '$$'
+        const sameLineCloseIdx = trimmed.indexOf(closeDelim, 2)
+
+        if (sameLineCloseIdx !== -1) {
+          const expr = trimmed.slice(2, sameLineCloseIdx)
+          const trailing = trimmed.slice(sameLineCloseIdx + closeDelim.length).trim()
+          blocks.push(
+            <LatexMathFormula
+              key={`math_${segIdx}_${i}`}
+              latex={expr}
+              displayMode={true}
+            />
+          )
+          if (trailing) {
+            blocks.push(
+              <p
+                key={`math_trail_${segIdx}_${i}`}
+                className="my-2 text-[14px] leading-[1.78] text-[#2c2c2e] whitespace-pre-wrap font-sans"
+              >
+                {renderInlineTerminalText(trailing, content)}
+              </p>
+            )
+          }
+          i++
+          continue
+        }
+
+        // Multi-line block math (`\[\n ... \n\]` or `$$\n ... \n$$`)
+        const mathLines: string[] = []
+        const firstLineRest = trimmed.slice(2).trim()
+        if (firstLineRest) mathLines.push(firstLineRest)
+
+        let j = i + 1
+        let foundClose = false
+        let hasHeadingBreak = false
+        let trailingAfterClose = ''
+        while (j < pLines.length) {
+          const candTrim = pLines[j].trim()
+          if (/^#{1,4}\s+/.test(candTrim)) {
+            hasHeadingBreak = true
+            break
+          }
+          const closeIdx = candTrim.indexOf(closeDelim)
+          if (closeIdx !== -1) {
+            const beforeClose = candTrim.slice(0, closeIdx).trim()
+            if (beforeClose) mathLines.push(beforeClose)
+            trailingAfterClose = candTrim.slice(closeIdx + closeDelim.length).trim()
+            foundClose = true
+            break
+          }
+          mathLines.push(pLines[j])
+          j++
+          if (mathLines.length > 40) break
+        }
+
+        if (foundClose || (!hasHeadingBreak && mathLines.length > 0 && mathLines.length <= 25 && j === pLines.length)) {
+          blocks.push(
+            <LatexMathFormula
+              key={`math_${segIdx}_${i}`}
+              latex={mathLines.join('\n')}
+              displayMode={true}
+            />
+          )
+          if (trailingAfterClose) {
+            blocks.push(
+              <p
+                key={`math_trail_${segIdx}_${j}`}
+                className="my-2 text-[14px] leading-[1.78] text-[#2c2c2e] whitespace-pre-wrap font-sans"
+              >
+                {renderInlineTerminalText(trailingAfterClose, content)}
+              </p>
+            )
+          }
+          i = foundClose ? j + 1 : j
+          continue
+        }
       }
 
       // Markdown Table (`| a | b |` followed by `| --- | --- |`)
@@ -1417,6 +1516,8 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
         if (
           !nextTrim ||
           nextIsTreeStart ||
+          nextTrim.startsWith('\\[') ||
+          nextTrim.startsWith('$$') ||
           /^(#{1,4})\s+/.test(nextTrim) ||
           nextTrim.startsWith('>') ||
           nextTrim.startsWith('|') ||

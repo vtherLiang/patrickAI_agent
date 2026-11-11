@@ -35,6 +35,7 @@ import {
   DEFAULT_DOC_TEMPLATE,
   naturalizeMarkdownDocument
 } from '../utils/docNaturalizer'
+import { isLikelyInlineMathDollar, latexToHtml } from '../utils/latexMathUtils'
 
 interface HealthCheckIssue {
   type: 'warning' | 'info' | 'error'
@@ -308,12 +309,39 @@ export const DocEditorView: React.FC = () => {
     }
 
     const formatInline = (t: string): string => {
-      return escapeHtml(t)
+      // Protect LaTeX math spans before HTML escaping so `<`, `>`, `&` inside formulas render cleanly
+      const mathHtmlSlots: string[] = []
+      const withMathSlots = t.replace(
+        /`[^`]+`|\\\[[^\n]+?\\\]|\$\$[^\n]+?\$\$|\\\(.+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$/g,
+        (m) => {
+          if (m.startsWith('`')) return m
+          let inner = ''
+          if (m.startsWith('\\(') && m.endsWith('\\)')) {
+            inner = m.slice(2, -2)
+          } else if (m.startsWith('\\[') && m.endsWith('\\]')) {
+            inner = m.slice(2, -2)
+          } else if (m.startsWith('$$') && m.endsWith('$$')) {
+            inner = m.slice(2, -2)
+          } else if (m.startsWith('$') && m.endsWith('$')) {
+            const candidate = m.slice(1, -1)
+            if (!isLikelyInlineMathDollar(candidate)) return m
+            inner = candidate
+          } else {
+            return m
+          }
+          const idx = mathHtmlSlots.length
+          mathHtmlSlots.push(latexToHtml(inner, false))
+          return `\uE002MATH_${idx}\uE003`
+        }
+      )
+
+      return escapeHtml(withMathSlots)
         .replace(/`([^`]+)`/g, '<code class="doc-code">$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/\*([^*]+)\*/g, '<em>$1</em>')
         .replace(/~~([^~]+)~~/g, '<del>$1</del>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+        .replace(/\uE002MATH_(\d+)\uE003/g, (_m, idxStr) => mathHtmlSlots[Number(idxStr)] || '')
     }
 
     for (let i = 0; i < lines.length; i++) {
@@ -340,6 +368,46 @@ export const DocEditorView: React.FC = () => {
           `<pre class="doc-pre"><code>${codeLines.join('\n')}</code></pre>`
         )
         continue
+      }
+
+      // Display Math Block (`\[ ... \]` or `$$ ... $$`)
+      if (trimmed.startsWith('\\[') || trimmed.startsWith('$$')) {
+        flushList()
+        flushTable()
+        const closeDelim = trimmed.startsWith('\\[') ? '\\]' : '$$'
+        const sameLineClose = trimmed.indexOf(closeDelim, 2)
+        if (sameLineClose !== -1) {
+          htmlChunks.push(latexToHtml(trimmed.slice(2, sameLineClose), true))
+          const trailing = trimmed.slice(sameLineClose + closeDelim.length).trim()
+          if (trailing) htmlChunks.push(`<p class="doc-p">${formatInline(trailing)}</p>`)
+          continue
+        }
+        const mathLines: string[] = []
+        const firstRest = trimmed.slice(2).trim()
+        if (firstRest) mathLines.push(firstRest)
+        let j = i + 1
+        let foundClose = false
+        let trailing = ''
+        while (j < lines.length) {
+          const cand = lines[j].trim()
+          const closeIdx = cand.indexOf(closeDelim)
+          if (closeIdx !== -1) {
+            const before = cand.slice(0, closeIdx).trim()
+            if (before) mathLines.push(before)
+            trailing = cand.slice(closeIdx + closeDelim.length).trim()
+            foundClose = true
+            break
+          }
+          mathLines.push(lines[j])
+          j++
+          if (mathLines.length > 40) break
+        }
+        if (foundClose) {
+          htmlChunks.push(latexToHtml(mathLines.join('\n'), true))
+          if (trailing) htmlChunks.push(`<p class="doc-p">${formatInline(trailing)}</p>`)
+          i = j
+          continue
+        }
       }
 
       // Horizontal Rule

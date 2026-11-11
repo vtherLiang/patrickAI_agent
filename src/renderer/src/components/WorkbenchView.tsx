@@ -917,6 +917,8 @@ export const WorkbenchView: React.FC = () => {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const activeGeneratingRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const isComposingRef = useRef(false)
+  const lastCompositionEndAtRef = useRef(0)
   const modeMenuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -1068,6 +1070,7 @@ export const WorkbenchView: React.FC = () => {
   // Global keyboard shortcuts matching OpenAI Codex & Claude Code (`Esc`, `⌘N`, `⌘O`)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Escape' && isBusy) {
         abortGeneration()
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
@@ -1913,7 +1916,29 @@ export const WorkbenchView: React.FC = () => {
                     ingestFiles(files)
                   }
                 }}
+                onCompositionStart={() => {
+                  isComposingRef.current = true
+                }}
+                onCompositionEnd={(e) => {
+                  isComposingRef.current = false
+                  lastCompositionEndAtRef.current = performance.now()
+                  checkSkillMention(e.currentTarget.value, e.currentTarget.selectionStart)
+                }}
+                onBlur={() => {
+                  isComposingRef.current = false
+                }}
                 onKeyDown={(e) => {
+                  // Isolate IME composition (e.g. pressing Enter in Chinese Pinyin IME to commit English words)
+                  // from final submit/navigation Enter. Includes keyCode 229 and a brief post-compositionend
+                  // guard for WebKit/macOS IMEs where compositionend can precede the trailing Enter keydown.
+                  const isImeComposing =
+                    e.nativeEvent.isComposing ||
+                    e.keyCode === 229 ||
+                    e.nativeEvent.keyCode === 229 ||
+                    isComposingRef.current ||
+                    performance.now() - lastCompositionEndAtRef.current < 50
+                  if (isImeComposing) return
+
                   // Skill selection popup navigation
                   if (showSkillMenu && filteredSkills.length > 0) {
                     if (e.key === 'ArrowDown') {

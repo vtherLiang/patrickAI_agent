@@ -7,12 +7,12 @@
 可直接前往 [GitHub Releases](https://github.com/vtherLiang/patrickAI_agent/releases) 下载对应系统的安装包或免安装版：
 
 - **macOS 版本**：
-  - `PatrickAI-Agent-mac-arm64-1.0.0.dmg` / `.zip`（Apple Silicon M1/M2/M3/M4 芯片）
-  - `PatrickAI-Agent-mac-x64-1.0.0.dmg` / `.zip`（Intel 芯片）
+  - `PatrickAI-Agent-mac-arm64-1.0.1.dmg` / `.zip`（Apple Silicon M1/M2/M3/M4 芯片）
+  - `PatrickAI-Agent-mac-x64-1.0.1.dmg` / `.zip`（Intel 芯片）
   - *注：首次打开若提示未签名应用，可在终端执行 `xattr -cr "/Applications/PatrickAI Agent.app"` 或在「系统设置 -> 隐私与安全性」中点击「仍要打开」。*
 - **Windows 版本**：
-  - `PatrickAI-Agent-Windows-Setup-1.0.0.exe`（Windows x64 安装程序）
-  - `PatrickAI-Agent-win-x64-1.0.0.zip`（Windows x64 绿色免安装版，解压即用）
+  - `PatrickAI-Agent-Windows-Setup-1.0.1.exe`（Windows x64 安装程序）
+  - `PatrickAI-Agent-win-x64-1.0.1.zip`（Windows x64 绿色免安装版，解压即用）
 
 ## 核心架构模块
 

@@ -221,6 +221,9 @@ export interface ChatAttachment {
   previewDataUrl?: string
   extractedText?: string
   summaryMeta?: string
+  isCompacted?: boolean
+  offloadedPath?: string
+  omitImageFromContext?: boolean
   excelData?: {
     sheets: Array<{
       name: string
@@ -285,6 +288,8 @@ export interface ChatMessage {
   toolName?: string
   timestamp: number
   isCompactedSummary?: boolean
+  offloadedPath?: string
+  isPrunedBranch?: boolean
   estimatedTokens?: number
   recalledMemories?: RecalledMemoryItem[]
   crystallizedMemories?: Array<{

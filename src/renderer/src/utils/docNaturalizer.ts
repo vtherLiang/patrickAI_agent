@@ -276,13 +276,16 @@ function applyRulesToProtectedSegment(segment: string, rules: ReplacementRule[])
 } {
   if (!segment.trim()) return { out: segment, hits: 0 }
 
-  // Mask inline code `...` and markdown link URLs `](...)` so technical tokens stay 100% intact
+  // Mask inline code `...`, URLs `](...)`, and LaTeX formulas so technical/math tokens stay 100% intact
   const masks: string[] = []
-  let masked = segment.replace(/`[^`]+`|\((https?:\/\/[^)]+)\)/g, (m) => {
-    const idx = masks.length
-    masks.push(m)
-    return `\uE000MASK_${idx}\uE001`
-  })
+  let masked = segment.replace(
+    /`[^`]+`|\((https?:\/\/[^)]+)\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\(.+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$/g,
+    (m) => {
+      const idx = masks.length
+      masks.push(m)
+      return `\uE000MASK_${idx}\uE001`
+    }
+  )
 
   let hits = 0
   for (const rule of rules) {

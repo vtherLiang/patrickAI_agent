@@ -41,6 +41,12 @@ export class QueryEngine {
     }
   >()
 
+  // Persistent Session-Level Scratchpad Ledger (Context-Folding & Multi-turn Continuity)
+  private sessionInspectedFiles = new Set<string>()
+  private sessionModifiedFiles = new Map<string, 'ok' | 'warning'>()
+  private sessionFindings: string[] = []
+  private prunedToolCallIds = new Set<string>()
+
   constructor(
     private configStore: ConfigStore,
     private llmClient: OpenAICompatibleClient,
@@ -60,6 +66,7 @@ export class QueryEngine {
   setMessages(nextMessages: ChatMessage[]): void {
     this.abort()
     this.messages = Array.isArray(nextMessages) ? [...nextMessages] : []
+    this.compactPipeline.resetSessionState()
     this.emitFullState()
   }
 
@@ -71,6 +78,11 @@ export class QueryEngine {
   clearSession(): void {
     this.abort()
     this.messages = []
+    this.sessionInspectedFiles.clear()
+    this.sessionModifiedFiles.clear()
+    this.sessionFindings = []
+    this.prunedToolCallIds.clear()
+    this.compactPipeline.resetSessionState()
     this.emitFullState()
   }
 
@@ -129,7 +141,12 @@ export class QueryEngine {
 
   async triggerManualCompact(): Promise<string> {
     const cfg = this.configStore.getConfig()
-    this.messages = this.compactPipeline.runMicroCompact(this.messages, 2)
+    this.messages = this.compactPipeline.runMicroCompact(this.messages, {
+      keepRecentCount: 2,
+      workspaceDir: cfg.workspaceDir,
+      activeGoal: '手动触发紧凑压缩',
+      prunedToolCallIds: this.prunedToolCallIds
+    })
     const { messages, summaryText } = await this.compactPipeline.runAutoCompact(this.messages, cfg)
     this.messages = messages
     this.emitFullState()
@@ -201,6 +218,7 @@ export class QueryEngine {
       return
     }
 
+    this.compactPipeline.loadAconRulesFromWorkspace(cfg.workspaceDir)
     this.setBusy(true)
     this.abortController = new AbortController()
 
@@ -216,10 +234,15 @@ export class QueryEngine {
     const reflexionLessons: string[] = []
 
     try {
-      // 1. Prefix-Preserved Layer 1 MicroCompact:
-      // Executed ONCE at the Turn Boundary before the multi-step loop begins!
+      // 1. Prefix-Preserved Reversible Layer 1 MicroCompact:
+      // Executed ONCE at Turn Boundary before the multi-step loop begins.
       // Keeps all message prefixes 100% immutable during intra-turn tool loops to maximize API Prompt Cache hits.
-      this.messages = this.compactPipeline.runMicroCompact(this.messages, 8)
+      this.messages = this.compactPipeline.runMicroCompact(this.messages, {
+        keepRecentCount: 8,
+        workspaceDir: cfg.workspaceDir,
+        activeGoal: promptQuery,
+        prunedToolCallIds: this.prunedToolCallIds
+      })
 
       const maxTurns = 20
       let turnsRemaining = maxTurns
@@ -230,6 +253,13 @@ export class QueryEngine {
         // 2. Check Layer 2 AutoCompact threshold
         const stats = this.getTokenStats()
         this.emitUpdate({ type: 'token_stats', tokenStats: stats })
+
+        // Parallel Context Compaction (Cim et al., 2026):
+        // Asynchronously pre-compact historical frozen turns when usage hits 68%,
+        // eliminating the synchronous latency freeze when crossing the 85% threshold.
+        if (stats.usageRatio >= 0.68 && stats.usageRatio < currentCfg.autoCompactThreshold) {
+          this.compactPipeline.maybePrecompactInBackground(this.messages, currentCfg).catch(() => {})
+        }
 
         if (stats.usageRatio >= currentCfg.autoCompactThreshold) {
           const compacted = await this.compactPipeline.runAutoCompact(this.messages, currentCfg)
@@ -279,7 +309,15 @@ export class QueryEngine {
             prunedSignatures: Array.from(latsPrunedSignatures),
             backtrackCount: latsBacktrackCount
           },
-          reflexionLessons
+          reflexionLessons,
+          {
+            sessionInspectedFiles: Array.from(this.sessionInspectedFiles),
+            sessionModifiedFiles: Array.from(this.sessionModifiedFiles.entries()).map(([file, aciStatus]) => ({
+              file,
+              aciStatus
+            })),
+            sessionFindings: this.sessionFindings
+          }
         )
 
         const apiMessages = this.buildOpenAIMessages(
@@ -493,11 +531,43 @@ export class QueryEngine {
           latsBestValueScore = evaluation.updatedValueScore
           if (evaluation.shouldPrune) {
             latsPrunedSignatures.add(actionSignature)
+            this.prunedToolCallIds.add(toolCall.id)
             latsBacktrackCount += 1
           }
           if (evaluation.reflexionLesson) {
             reflexionLessons.push(evaluation.reflexionLesson)
             toolCall.resultOutput = `${toolCall.resultOutput}\n\n${evaluation.reflexionLesson}`
+          }
+
+          // Persistent Context Ledger & ACON (Agent Context Optimization) Diagnosis
+          const fp = parsedArgs.file_path ? String(parsedArgs.file_path) : ''
+          if (['read_file', 'inspect_code_symbols'].includes(toolCall.name) && fp) {
+            if (
+              this.sessionInspectedFiles.has(fp) &&
+              (stats.autoCompactedCount > 0 || stats.microCompactedCount > 0)
+            ) {
+              this.compactPipeline.recordAconFailure(
+                `文件 "${fp}" 存在压缩后重复勘探：后续紧凑压缩必须保留该文件导出的核心符号与行号范围`,
+                latestCfg.workspaceDir
+              )
+            }
+            this.sessionInspectedFiles.add(fp)
+          } else if (['edit_file', 'write_file'].includes(toolCall.name) && fp) {
+            const hasWarn = toolCall.resultOutput?.includes('ACI Linter 语法预检告警')
+            this.sessionModifiedFiles.set(fp, hasWarn ? 'warning' : 'ok')
+          } else if (toolCall.name === 'search_files' && toolCall.status === 'completed') {
+            const firstLine = (toolCall.resultOutput || '').split('\n')[0] || ''
+            if (firstLine && !this.sessionFindings.includes(firstLine)) {
+              this.sessionFindings.push(`检索 (${parsedArgs.query || '目录'}): ${firstLine}`)
+              if (this.sessionFindings.length > 12) this.sessionFindings.shift()
+            }
+          }
+
+          if (toolCall.resultOutput?.includes('未找到完全匹配的 old_string')) {
+            this.compactPipeline.recordAconFailure(
+              `edit_file 在 "${fp || '目标文件'}" 发生锚点未命中：压缩时切勿过度截断被修改区域的代码原貌`,
+              latestCfg.workspaceDir
+            )
           }
 
           collectedToolCalls.push(toolCall)
@@ -851,7 +921,9 @@ export class QueryEngine {
     }
 
     const combinedText = blocks.join('\n\n')
-    const imageAtts = atts.filter((a) => a.kind === 'image' && Boolean(a.previewDataUrl))
+    const imageAtts = atts.filter(
+      (a) => a.kind === 'image' && Boolean(a.previewDataUrl) && !a.omitImageFromContext
+    )
 
     if (enableVisionParts && imageAtts.length > 0) {
       const parts: OpenAIMessageContentPart[] = [{ type: 'text', text: combinedText }]
@@ -951,22 +1023,23 @@ export class QueryEngine {
     workingScratchpad?: string
   ): OpenAIMessagePayload[] {
     const enableVision = this.supportsVisionImageUrl(modelName)
-    let systemPrompt = SystemPromptBuilder.build(workspaceDir, permissionMode, {
-      recalledMemoriesBlock: this.memoryEngine
-        ? this.memoryEngine.formatRecalledForPrompt(recalledMemories)
-        : undefined,
-      skillsBlock: this.skillManager
-        ? this.skillManager.buildPromptInjection(userQuery)
-        : undefined,
-      mcpBlock: this.mcpManager ? this.mcpManager.buildPromptInjection() : undefined
-    })
+
+    // Prefix-Preserved KV Cache Alignment (Prompt-Cooperative KV Cache Reuse):
+    // The base systemPrompt at payload[0] stays 100% byte-identical across ALL turns in the session.
+    // Dynamic per-turn memories and query-specific skills are isolated to the active user message.
+    let systemPrompt = SystemPromptBuilder.build(
+      workspaceDir,
+      permissionMode,
+      {
+        mcpBlock: this.mcpManager ? this.mcpManager.buildPromptInjection() : undefined
+      },
+      { includePerTurnDynamicBlocks: false }
+    )
 
     if (interruptedReasoningHint) {
       systemPrompt += `\n\n[上下文先验·上一轮被中止思考概要]:\n${interruptedReasoningHint.slice(0, 1800)}\n(注意：用户此前已在思考阶段中止并显式指令「继续输出」。请直接承接上述思考脉络，无需进行漫长重新思考，立即输出结构化、详尽的最终回答与代码解决方案！)`
     }
 
-    // Prefix-Preserved KV Cache Design:
-    // Keep `systemPrompt` and historical messages 100% constant across all intra-turn steps!
     const payload: OpenAIMessagePayload[] = [
       {
         role: 'system',
@@ -974,15 +1047,59 @@ export class QueryEngine {
       }
     ]
 
+    const turnDynamicContext = SystemPromptBuilder.buildTurnDynamicContext({
+      recalledMemoriesBlock: this.memoryEngine
+        ? this.memoryEngine.formatRecalledForPrompt(recalledMemories)
+        : undefined,
+      skillsBlock: this.skillManager
+        ? this.skillManager.buildPromptInjection(userQuery)
+        : undefined
+    })
+
+    // Find latest user message to attach turnDynamicContext
+    let latestUserMsgId: string | null = null
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].role === 'user') {
+        latestUserMsgId = this.messages[i].id
+        break
+      }
+    }
+
     for (const msg of this.messages) {
       // Exclude placeholder currently being generated in this turn
       if (currentAssistantMsgId && msg.id === currentAssistantMsgId) continue
 
       if (msg.role === 'user') {
-        payload.push({
-          role: 'user',
-          content: this.formatMessageWithAttachments(msg, enableVision)
-        })
+        const formatted = this.formatMessageWithAttachments(msg, enableVision)
+        if (msg.id === latestUserMsgId && turnDynamicContext) {
+          if (typeof formatted === 'string') {
+            payload.push({
+              role: 'user',
+              content: `${formatted}\n\n[本轮先验知识与技能上下文]:\n${turnDynamicContext}`
+            })
+          } else if (Array.isArray(formatted)) {
+            const parts: OpenAIMessageContentPart[] = [...formatted]
+            if (parts.length > 0 && parts[0].type === 'text') {
+              parts[0] = {
+                type: 'text',
+                text: `${parts[0].text}\n\n[本轮先验知识与技能上下文]:\n${turnDynamicContext}`
+              }
+            } else {
+              parts.push({
+                type: 'text',
+                text: `[本轮先验知识与技能上下文]:\n${turnDynamicContext}`
+              })
+            }
+            payload.push({ role: 'user', content: parts })
+          } else {
+            payload.push({ role: 'user', content: formatted })
+          }
+        } else {
+          payload.push({
+            role: 'user',
+            content: formatted
+          })
+        }
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           payload.push({
@@ -1018,7 +1135,7 @@ export class QueryEngine {
     }
 
     // Attach Dynamic Working Scratchpad & Convergence Hint strictly at the tail message
-    // so prefix tokens (0..N-1) remain byte-for-byte identical for LLM Prompt Cache hits!
+    // so prefix tokens (0..N-1) remain byte-for-byte identical across intra-turn tool steps!
     const tailDynamicBlock = [workingScratchpad, convergenceHint].filter(Boolean).join('\n\n')
     if (tailDynamicBlock && payload.length > 1) {
       const lastItem = payload[payload.length - 1]
@@ -1027,10 +1144,19 @@ export class QueryEngine {
           ...lastItem,
           content: `${lastItem.content}\n\n${tailDynamicBlock}`
         }
-      } else if (lastItem.role === 'user' && typeof lastItem.content === 'string') {
-        payload[payload.length - 1] = {
-          ...lastItem,
-          content: `${lastItem.content}\n\n${tailDynamicBlock}`
+      } else if (lastItem.role === 'user') {
+        if (typeof lastItem.content === 'string') {
+          payload[payload.length - 1] = {
+            ...lastItem,
+            content: `${lastItem.content}\n\n${tailDynamicBlock}`
+          }
+        } else if (Array.isArray(lastItem.content)) {
+          const parts = [...lastItem.content]
+          parts.push({ type: 'text', text: tailDynamicBlock })
+          payload[payload.length - 1] = {
+            ...lastItem,
+            content: parts
+          }
         }
       }
     }

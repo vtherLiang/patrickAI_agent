@@ -9,6 +9,8 @@
  * 4. Loss of visual hierarchy when HTML/Markdown syntax is unavailable in WeChat chat
  */
 
+import { isLikelyInlineMathDollar, latexToUnicodeText } from './latexMathUtils'
+
 export type TableScheduleMode = 'grid' | 'kv-pair' | 'card-matrix'
 
 export type WeChatTableStyle = 'card' | 'list' | 'rail' | 'grid'
@@ -330,6 +332,22 @@ export function wrapToVisualBudget(text: string, budgetEm: number): string[] {
 function formatInlineWeChat(text: string, insideTableCell = false): string {
   let out = text.trim()
 
+  // Convert inline/single-line LaTeX math (`\( ... \)`, `$ ... $`, `\[ ... \]`, `$$ ... $$`) to clean Unicode math
+  out = out.replace(
+    /`[^`]+`|\\\[[^\n]+?\\\]|\$\$[^\n]+?\$\$|\\\(.+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$/g,
+    (m) => {
+      if (m.startsWith('`')) return m
+      if ((m.startsWith('\\(') && m.endsWith('\\)')) || (m.startsWith('\\[') && m.endsWith('\\]')) || (m.startsWith('$$') && m.endsWith('$$'))) {
+        return latexToUnicodeText(m.slice(2, -2))
+      }
+      if (m.startsWith('$') && m.endsWith('$')) {
+        const inner = m.slice(1, -1)
+        return isLikelyInlineMathDollar(inner) ? latexToUnicodeText(inner) : m
+      }
+      return m
+    }
+  )
+
   // Links: [label](url) -> label ( url ) so WeChat URL detector never swallows closing parenthesis
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) => {
     const cleanLabel = label.trim()
@@ -638,6 +656,55 @@ export function scheduleWeChatDocument(
       recordStructuredLines(renderedCode)
       blocks.push({ kind: 'content', text: renderedCode.join('\n') })
       continue
+    }
+
+    // 2b. Display Math Blocks: \[ ... \] or $$ ... $$
+    if (trimmed.startsWith('\\[') || trimmed.startsWith('$$')) {
+      const closeDelim = trimmed.startsWith('\\[') ? '\\]' : '$$'
+      const sameLineClose = trimmed.indexOf(closeDelim, 2)
+      let expr = ''
+      let trailing = ''
+
+      if (sameLineClose !== -1) {
+        expr = trimmed.slice(2, sameLineClose)
+        trailing = trimmed.slice(sameLineClose + closeDelim.length).trim()
+        i++
+      } else {
+        const mathLines: string[] = []
+        const firstRest = trimmed.slice(2).trim()
+        if (firstRest) mathLines.push(firstRest)
+        let j = i + 1
+        let foundClose = false
+        while (j < rawLines.length) {
+          const cand = rawLines[j].trim()
+          const closeIdx = cand.indexOf(closeDelim)
+          if (closeIdx !== -1) {
+            const before = cand.slice(0, closeIdx).trim()
+            if (before) mathLines.push(before)
+            trailing = cand.slice(closeIdx + closeDelim.length).trim()
+            foundClose = true
+            break
+          }
+          mathLines.push(rawLines[j])
+          j++
+          if (mathLines.length > 40) break
+        }
+        if (foundClose) {
+          expr = mathLines.join('\n')
+          i = j + 1
+        }
+      }
+
+      if (expr) {
+        const unicodeEq = latexToUnicodeText(expr)
+        if (unicodeEq) {
+          blocks.push({ kind: 'content', text: unicodeEq })
+        }
+        if (trailing) {
+          blocks.push({ kind: 'content', text: formatInlineWeChat(trailing) })
+        }
+        continue
+      }
     }
 
     // 3. Horizontal Rule: --- or ***

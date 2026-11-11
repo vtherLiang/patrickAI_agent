@@ -17,8 +17,10 @@ export class SystemPromptBuilder {
   static build(
     workspaceDir: string,
     permissionMode: AgentPermissionMode = 'default',
-    dynamicInjections?: PromptDynamicInjections
+    dynamicInjections?: PromptDynamicInjections,
+    options?: { includePerTurnDynamicBlocks?: boolean }
   ): string {
+    const includePerTurn = options?.includePerTurnDynamicBlocks ?? true
     const sections: string[] = [
       `你是 Claude Code Studio（融合 OpenAI Codex 多项目侧栏 + Claude Code v2.1.88 核心引擎 + L1-L5 分层自演化记忆系统的原生桌面研发工作台）。`,
       `当前激活工作区路径: ${workspaceDir}`,
@@ -65,22 +67,38 @@ export class SystemPromptBuilder {
     }
 
     // 1. Selective Per-Query L1-L5 Hierarchical Memory Recall
-    // Only injects memories if the relevance engine successfully recalls relevant memories for this specific turn!
-    if (dynamicInjections?.recalledMemoriesBlock && dynamicInjections.recalledMemoriesBlock.trim()) {
+    // Only injects into systemPrompt if includePerTurn is true (otherwise injected at turn level to preserve Prompt Cache!)
+    if (includePerTurn && dynamicInjections?.recalledMemoriesBlock && dynamicInjections.recalledMemoriesBlock.trim()) {
       sections.push('', dynamicInjections.recalledMemoriesBlock.trim())
     }
 
     // 2. Active Progressive-Disclosure Skills
-    if (dynamicInjections?.skillsBlock) {
+    if (includePerTurn && dynamicInjections?.skillsBlock) {
       sections.push('', dynamicInjections.skillsBlock)
     }
 
-    // 3. Active MCP Servers
+    // 3. Active MCP Servers (Stable across turns)
     if (dynamicInjections?.mcpBlock) {
       sections.push('', dynamicInjections.mcpBlock)
     }
 
     return sections.join('\n')
+  }
+
+  /**
+   * Builds per-turn dynamic prompt context (e.g. recalled memories and query-specific skills),
+   * injected onto the active user message to guarantee systemPrompt stays 100% byte-identical
+   * across multi-turn sessions for prefix KV cache reuse.
+   */
+  static buildTurnDynamicContext(dynamicInjections?: PromptDynamicInjections): string {
+    const blocks: string[] = []
+    if (dynamicInjections?.recalledMemoriesBlock && dynamicInjections.recalledMemoriesBlock.trim()) {
+      blocks.push(dynamicInjections.recalledMemoriesBlock.trim())
+    }
+    if (dynamicInjections?.skillsBlock && dynamicInjections.skillsBlock.trim()) {
+      blocks.push(dynamicInjections.skillsBlock.trim())
+    }
+    return blocks.join('\n\n')
   }
 
   static getMemoryFilePath(workspaceDir: string): string {
