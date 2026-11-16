@@ -103,11 +103,51 @@ export function sanitizeThreadSideChat(thread: CodexThread): CodexThread {
   }
 }
 
+export function sanitizeRestoredMessages(messages: ChatMessage[]): ChatMessage[] {
+  if (!Array.isArray(messages)) return []
+  const now = Date.now()
+  return messages.map((m) => {
+    const hasStaleThinking = Boolean(m.isThinkingStreaming)
+    const hasStaleTool = Boolean(
+      m.toolCalls?.some((tc) => tc.status === 'running' || tc.status === 'pending_approval')
+    )
+    if (!hasStaleThinking && !hasStaleTool) return m
+
+    const elapsed = m.timestamp ? now - m.timestamp : 1200
+    const safeDuration =
+      m.thinkingDurationMs || (elapsed > 0 && elapsed < 300_000 ? Math.max(200, elapsed) : 1200)
+
+    return {
+      ...m,
+      isThinkingStreaming: false,
+      ...(hasStaleThinking ? { thinkingDurationMs: safeDuration } : {}),
+      ...(hasStaleThinking && !m.content?.trim() && !(m.toolCalls?.length)
+        ? { interrupted: true }
+        : {}),
+      ...(hasStaleTool && m.toolCalls
+        ? {
+            toolCalls: m.toolCalls.map((tc) =>
+              tc.status === 'running' || tc.status === 'pending_approval'
+                ? {
+                    ...tc,
+                    status: 'error' as const,
+                    resultOutput: tc.resultOutput || '会话已中断',
+                    completedAt: tc.completedAt || now
+                  }
+                : tc
+            )
+          }
+        : {})
+    }
+  })
+}
+
 export interface CodexSideChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   reasoningContent?: string
+  thinkingDurationMs?: number
   attachments?: ChatAttachment[]
   timestamp: number
 }
@@ -302,7 +342,7 @@ function normalizeCodexThread(t: CodexThread, defaultWorkspace: string): CodexTh
   const threadWithDefaults: CodexThread = {
     ...t,
     workspaceDir: t.workspaceDir || defaultWorkspace,
-    messages: Array.isArray(t.messages) ? t.messages : [],
+    messages: sanitizeRestoredMessages(Array.isArray(t.messages) ? t.messages : []),
     sideChatMessages: Array.isArray(t.sideChatMessages) ? t.sideChatMessages : [],
     sideChatUpdatedAt: typeof t.sideChatUpdatedAt === 'number' ? t.sideChatUpdatedAt : undefined,
     sideChatExpired: Boolean(t.sideChatExpired),
@@ -589,6 +629,7 @@ interface AppState {
   draftComposerAttachments: ChatAttachment[] | null
   isBusy: boolean
   busyStartedAt: number | null
+  liveOutputTokens: number
   pendingApproval: ToolCallItem | null
   tokenStats: TokenUsageStats
   terminalLogs: TerminalLogLine[]
@@ -729,6 +770,7 @@ interface AppState {
   // Codex Thread Actions
   createNewThread: (projectDir?: string) => Promise<void>
   switchThread: (threadId: string) => Promise<void>
+  renameThread: (threadId: string, newTitle: string) => void
   togglePinThread: (threadId: string) => void
   archiveThread: (threadId: string) => Promise<void>
 
@@ -815,6 +857,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   draftComposerAttachments: null,
   isBusy: false,
   busyStartedAt: null,
+  liveOutputTokens: 0,
   pendingApproval: null,
   tokenStats: {
     currentTokens: 0,
@@ -1912,9 +1955,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const activeId = initialThreads[0].id
 
     if (sessionState.messages && sessionState.messages.length > 0) {
+      const sanitizedSessionMessages = sanitizeRestoredMessages(sessionState.messages)
       initialThreads[0] = deriveThreadMeta(
         initialThreads[0],
-        sessionState.messages,
+        sanitizedSessionMessages,
         false,
         false
       )
@@ -1981,18 +2025,38 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().refreshFileTree()
         get().refreshGitStatus()
       } else if (payload.type === 'streaming_delta' && payload.streamingMessageId) {
+        const deltaChars =
+          (payload.contentDelta?.length || 0) + (payload.reasoningDelta?.length || 0)
+        const estimatedDeltaTokens =
+          typeof payload.outputTokenDelta === 'number'
+            ? payload.outputTokenDelta
+            : deltaChars > 0
+              ? Math.max(1, Math.ceil(deltaChars * 0.35))
+              : 0
+        const shouldStopThinking = Boolean(
+          payload.contentDelta || payload.thinkingFinished || payload.toolCalling
+        )
+
         set((state) => ({
+          liveOutputTokens:
+            typeof payload.usageOutputTokens === 'number' && payload.usageOutputTokens > 0
+              ? Math.max(state.liveOutputTokens, payload.usageOutputTokens)
+              : state.liveOutputTokens + estimatedDeltaTokens,
           messages: state.messages.map((m) =>
             m.id === payload.streamingMessageId && !m.interrupted
               ? {
                   ...m,
                   content: m.content + (payload.contentDelta || ''),
                   isThinkingStreaming:
-                    payload.contentDelta || m.content ? false : m.isThinkingStreaming,
+                    shouldStopThinking || Boolean(m.content) ? false : m.isThinkingStreaming,
                   thinkingDurationMs:
-                    (payload.contentDelta || m.content) && m.isThinkingStreaming && !m.thinkingDurationMs
-                      ? Math.max(200, Date.now() - m.timestamp)
-                      : m.thinkingDurationMs,
+                    (shouldStopThinking || Boolean(m.content)) &&
+                    m.isThinkingStreaming &&
+                    !m.thinkingDurationMs
+                      ? payload.thinkingDurationMs || Math.max(200, Date.now() - m.timestamp)
+                      : payload.thinkingDurationMs && !m.thinkingDurationMs
+                        ? payload.thinkingDurationMs
+                        : m.thinkingDurationMs,
                   reasoningContent:
                     (m.reasoningContent || '') + (payload.reasoningDelta || '') || undefined
                 }
@@ -2040,12 +2104,18 @@ export const useAppStore = create<AppState>((set, get) => ({
             const last = msgs[msgs.length - 1]
             const cleanPrevContent = cleanObjectText(last.content)
             const cleanPrevReasoning = cleanObjectText(last.reasoningContent)
+            const shouldFreezeThinking = Boolean(
+              rawContent && !cleanPrevContent && cleanPrevReasoning && !last.thinkingDurationMs
+            )
             msgs[msgs.length - 1] = {
               ...last,
               content: rawContent ? cleanPrevContent + rawContent : cleanPrevContent,
               reasoningContent: rawReasoning
                 ? (cleanPrevReasoning ? cleanPrevReasoning + rawReasoning : rawReasoning)
-                : cleanPrevReasoning || undefined
+                : cleanPrevReasoning || undefined,
+              ...(shouldFreezeThinking
+                ? { thinkingDurationMs: Math.max(200, Date.now() - last.timestamp) }
+                : {})
             }
           }
           const nextThreads = state.threads.map((t) =>
@@ -2099,18 +2169,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((state) => ({
           isBusy: busy,
           busyStartedAt: busy ? state.busyStartedAt || Date.now() : null,
-          messages: !busy
-            ? state.messages.map((m) =>
-                m.isThinkingStreaming
-                  ? {
-                      ...m,
-                      isThinkingStreaming: false,
-                      thinkingDurationMs: m.thinkingDurationMs || Math.max(200, Date.now() - m.timestamp),
-                      interrupted: true
-                    }
-                  : m
-              )
-            : state.messages
+          liveOutputTokens: busy ? (state.isBusy ? state.liveOutputTokens : 0) : 0,
+          messages: !busy ? sanitizeRestoredMessages(state.messages) : state.messages
         }))
         syncActiveThreadSnapshot()
       }
@@ -2368,11 +2428,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const currentActiveId = get().activeThreadId
     const currentSideOpen = get().isSideChatOpen
+    const currentMessages = get().messages
     const updatedThreads = get().threads.map((t) =>
-      t.id === currentActiveId ? { ...t, isSideChatOpen: currentSideOpen } : t
+      t.id === currentActiveId
+        ? {
+            ...t,
+            isSideChatOpen: currentSideOpen,
+            messages: sanitizeRestoredMessages(
+              currentMessages.length > 0 ? currentMessages : t.messages
+            ),
+            status: t.status === 'running' ? ('idle' as const) : t.status
+          }
+        : t
     )
 
-    await window.claudeDesktop.clearSession()
     const newThread: CodexThread = {
       id: `thread_${Date.now()}`,
       title: '新任务线程',
@@ -2397,38 +2466,56 @@ export const useAppStore = create<AppState>((set, get) => ({
       isSideChatExpired: false,
       isSideChatOpen: false,
       isSideChatMode: false,
+      isBusy: false,
+      busyStartedAt: null,
+      liveOutputTokens: 0,
       pendingApproval: null,
       terminalLogs: [],
       workbenchSubView: 'chat'
     })
     persistThreads(nextThreads)
+
+    await window.claudeDesktop.clearSession()
   },
 
   switchThread: async (threadId) => {
     const state = get()
-    // First, save current active thread's side chat open state
+    // First, save current active thread's side chat open state and freeze any active streaming state if leaving
     const currentId = state.activeThreadId
     const currentSideOpen = state.isSideChatOpen
+    const isSwitchingAway = threadId !== currentId
     const baseThreads = state.threads.map((t) =>
-      t.id === currentId ? { ...t, isSideChatOpen: currentSideOpen } : t
+      t.id === currentId
+        ? {
+            ...t,
+            isSideChatOpen: currentSideOpen,
+            ...(isSwitchingAway
+              ? {
+                  messages: sanitizeRestoredMessages(
+                    state.messages.length > 0 ? state.messages : t.messages
+                  ),
+                  status: t.status === 'running' ? ('idle' as const) : t.status
+                }
+              : {})
+          }
+        : t
     )
 
     let target = baseThreads.find((t) => t.id === threadId)
     if (!target) return
 
     target = sanitizeThreadSideChat(target)
+    if (isSwitchingAway) {
+      target = {
+        ...target,
+        messages: sanitizeRestoredMessages(target.messages)
+      }
+    }
     const nextThreads = baseThreads.map((t) => (t.id === target!.id ? target! : t))
-
-    if (target.workspaceDir && target.workspaceDir !== state.config?.workspaceDir) {
-      await get().switchProjectFolder(target.workspaceDir)
-    }
-
-    if (threadId !== state.activeThreadId) {
-      await window.claudeDesktop.setSessionMessages(target.messages)
-    }
-
     const shouldOpenSideChat = Boolean(target.isSideChatOpen)
 
+    // Update Zustand activeThreadId & threads BEFORE IPC session sync so incoming
+    // `messages_updated` / `agent_status` events never overwrite the departing thread!
     set({
       threads: nextThreads,
       activeThreadId: target.id,
@@ -2437,11 +2524,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       isSideChatExpired: Boolean(target.sideChatExpired),
       isSideChatOpen: shouldOpenSideChat,
       isSideChatMode: shouldOpenSideChat,
+      ...(isSwitchingAway ? { isBusy: false, busyStartedAt: null, liveOutputTokens: 0 } : {}),
       pendingApproval: null,
       workbenchSubView: 'chat'
     })
     persistWorkbenchSubView('chat')
     persistThreads(nextThreads)
+
+    if (target.workspaceDir && target.workspaceDir !== state.config?.workspaceDir) {
+      await get().switchProjectFolder(target.workspaceDir)
+    }
+
+    if (isSwitchingAway) {
+      await window.claudeDesktop.setSessionMessages(target.messages)
+    }
+  },
+
+  renameThread: (threadId, newTitle) => {
+    const trimmed = newTitle.trim()
+    if (!trimmed) return
+    const nextThreads = get().threads.map((t) =>
+      t.id === threadId ? { ...t, title: trimmed } : t
+    )
+    set({ threads: nextThreads })
+    persistThreads(nextThreads)
+    void flushThreadsToDiskNow(nextThreads)
   },
 
   togglePinThread: (threadId) => {
@@ -2462,7 +2569,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const remaining = state.threads.filter((t) => t.id !== threadId)
     if (remaining.length === 0) {
-      await window.claudeDesktop.clearSession()
       const fresh: CodexThread = {
         id: `thread_${Date.now()}`,
         title: '新任务线程',
@@ -2485,19 +2591,23 @@ export const useAppStore = create<AppState>((set, get) => ({
         isSideChatExpired: false,
         isSideChatOpen: false,
         isSideChatMode: false,
+        isBusy: false,
+        busyStartedAt: null,
+        liveOutputTokens: 0,
         pendingApproval: null
       })
       persistThreads([fresh])
+      await window.claudeDesktop.clearSession()
       return
     }
 
     if (state.activeThreadId === threadId) {
-      const nextActive = sanitizeThreadSideChat(remaining[0])
-      const nextRemaining = remaining.map((t) => (t.id === nextActive.id ? nextActive : t))
-      if (nextActive.workspaceDir && nextActive.workspaceDir !== state.config?.workspaceDir) {
-        await get().switchProjectFolder(nextActive.workspaceDir)
+      let nextActive = sanitizeThreadSideChat(remaining[0])
+      nextActive = {
+        ...nextActive,
+        messages: sanitizeRestoredMessages(nextActive.messages)
       }
-      await window.claudeDesktop.setSessionMessages(nextActive.messages)
+      const nextRemaining = remaining.map((t) => (t.id === nextActive.id ? nextActive : t))
       const nextSideOpen = Boolean(nextActive.isSideChatOpen)
       set({
         threads: nextRemaining,
@@ -2507,9 +2617,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         isSideChatExpired: Boolean(nextActive.sideChatExpired),
         isSideChatOpen: nextSideOpen,
         isSideChatMode: nextSideOpen,
+        isBusy: false,
+        busyStartedAt: null,
+        liveOutputTokens: 0,
         pendingApproval: null
       })
       persistThreads(nextRemaining)
+      if (nextActive.workspaceDir && nextActive.workspaceDir !== state.config?.workspaceDir) {
+        await get().switchProjectFolder(nextActive.workspaceDir)
+      }
+      await window.claudeDesktop.setSessionMessages(nextActive.messages)
     } else {
       set({ threads: remaining })
       persistThreads(remaining)
@@ -2542,7 +2659,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       msgIdx++
     }
 
-    const branchedMessages = state.messages.slice(0, msgIdx + 1)
+    const branchedMessages = sanitizeRestoredMessages(state.messages.slice(0, msgIdx + 1))
     const newThreadId = `thread_branch_${Date.now()}`
     const baseTitle = currentThread.title.replace(/^分支:\s*/, '')
     const branchTitle = `分支: ${baseTitle}`
@@ -2633,6 +2750,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       draftComposerAttachments: targetAttachments,
       isBusy: false,
       busyStartedAt: null,
+      liveOutputTokens: 0,
       pendingApproval: null,
       workbenchSubView: 'chat',
       toastNotification: {
@@ -2736,6 +2854,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       isBusy: false,
       busyStartedAt: null,
+      liveOutputTokens: 0,
       pendingApproval: null,
       messages: state.messages.map((m) =>
         m.isThinkingStreaming || (!m.content && m.reasoningContent && !m.thinkingDurationMs)

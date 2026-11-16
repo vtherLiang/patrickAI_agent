@@ -64,8 +64,34 @@ export class QueryEngine {
   }
 
   setMessages(nextMessages: ChatMessage[]): void {
-    this.abort()
-    this.messages = Array.isArray(nextMessages) ? [...nextMessages] : []
+    this.abort(false)
+    const now = Date.now()
+    this.messages = Array.isArray(nextMessages)
+      ? nextMessages.map((msg) => {
+          const sanitizedToolCalls = msg.toolCalls?.map((tc) =>
+            tc.status === 'running' || tc.status === 'pending_approval'
+              ? {
+                  ...tc,
+                  status: 'error' as const,
+                  resultOutput: tc.resultOutput || '会话已中断',
+                  completedAt: tc.completedAt || now
+                }
+              : tc
+          )
+          const wasStreaming = Boolean(msg.isThinkingStreaming)
+          return {
+            ...msg,
+            isThinkingStreaming: false,
+            thinkingDurationMs:
+              msg.thinkingDurationMs ||
+              (wasStreaming ? Math.max(200, now - (msg.timestamp || now)) : undefined),
+            ...(wasStreaming && !msg.content?.trim() && !(msg.toolCalls?.length)
+              ? { interrupted: true }
+              : {}),
+            ...(sanitizedToolCalls ? { toolCalls: sanitizedToolCalls } : {})
+          }
+        })
+      : []
     this.compactPipeline.resetSessionState()
     this.emitFullState()
   }
@@ -76,7 +102,7 @@ export class QueryEngine {
   }
 
   clearSession(): void {
-    this.abort()
+    this.abort(false)
     this.messages = []
     this.sessionInspectedFiles.clear()
     this.sessionModifiedFiles.clear()
@@ -86,7 +112,7 @@ export class QueryEngine {
     this.emitFullState()
   }
 
-  abort(): void {
+  abort(emitState = true): void {
     if (this.abortController) {
       this.abortController.abort()
       this.abortController = null
@@ -120,7 +146,7 @@ export class QueryEngine {
     }
 
     this.setBusy(false)
-    if (updated) {
+    if (updated && emitState) {
       this.emitFullState()
     }
   }
@@ -342,45 +368,16 @@ export class QueryEngine {
           proxyMode: currentCfg.proxyMode,
           proxyUrl: currentCfg.customProxyUrl,
           globalProxyUrl: currentCfg.globalProxyUrl,
-          onDelta: (delta) => {
-            if (this.abortController?.signal.aborted || assistantMsg.interrupted) {
-              return
-            }
-            if (delta.reasoning) {
-              if (!firstThinkingAt) firstThinkingAt = Date.now()
-              assistantMsg.reasoningContent =
-                (assistantMsg.reasoningContent || '') + delta.reasoning
-              assistantMsg.isThinkingStreaming = !assistantMsg.content
-            }
-            if (delta.content) {
-              if (assistantMsg.isThinkingStreaming) {
-                assistantMsg.isThinkingStreaming = false
-                if (firstThinkingAt) {
-                  assistantMsg.thinkingDurationMs = Date.now() - firstThinkingAt
-                }
-              }
-              assistantMsg.content += delta.content
-            }
-            if (delta.toolCalling && assistantMsg.isThinkingStreaming) {
-              assistantMsg.isThinkingStreaming = false
-              if (firstThinkingAt) {
-                assistantMsg.thinkingDurationMs = Date.now() - firstThinkingAt
-              }
-            }
-            this.emitUpdate({
-              type: 'streaming_delta',
-              streamingMessageId: assistantMsgId,
-              contentDelta: delta.content,
-              reasoningDelta: delta.reasoning
-            })
-          }
+          onDelta: this.createStreamDeltaHandler(assistantMsg, turnStart, () => firstThinkingAt, (t) => {
+            firstThinkingAt = t
+          })
         })
 
         assistantMsg.content = result.content
         assistantMsg.reasoningContent = result.reasoningContent || undefined
         assistantMsg.isThinkingStreaming = false
         if (assistantMsg.reasoningContent && !assistantMsg.thinkingDurationMs) {
-          assistantMsg.thinkingDurationMs = Date.now() - (firstThinkingAt || turnStart)
+          assistantMsg.thinkingDurationMs = Math.max(200, Date.now() - (firstThinkingAt || turnStart))
         }
 
         if (!result.toolCalls || result.toolCalls.length === 0) {
@@ -576,72 +573,175 @@ export class QueryEngine {
         }
       }
 
-      // 4.5. Guaranteed Final Synthesis Pass (绝对保障向用户交付深度分析报告与核心结论)
-      // 若本轮执行过工具，但最后一条消息带工具调用（前端会被判定为 activity 折叠）或正文为空，
-      // 必须无条件触发一次最终综合生成，禁止任何工具调用，强力要求输出结构化核心结论与关键要点！
+      // 4.5. Guaranteed Final Delivery Pass (绝对保障向用户交付完整正文结果，杜绝思考/执行完却无输出)
+      // 覆盖三类异常收敛场景：
+      // (a) 本轮执行过工具，但最后一条消息带工具调用或正文为空；
+      // (b) 未调用工具，但模型仅输出了思考过程 (reasoningContent) 却未交付最终正文；
+      // (c) 未调用工具且思考与正文均为空（例如中转站/模型因 tools 参数静默返回空流）。
       const currentCfgForSynth = this.configStore.getConfig()
-      const needsSynthesis =
-        collectedToolCalls.length > 0 &&
-        (!lastAssistantMsg ||
-          Boolean(lastAssistantMsg.toolCalls && lastAssistantMsg.toolCalls.length > 0) ||
-          !lastAssistantMsg.content ||
-          !lastAssistantMsg.content.trim())
+      const hasFinalProse = Boolean(
+        lastAssistantMsg &&
+          !(lastAssistantMsg.toolCalls && lastAssistantMsg.toolCalls.length > 0) &&
+          lastAssistantMsg.content &&
+          lastAssistantMsg.content.trim()
+      )
 
-      if (needsSynthesis && !this.abortController.signal.aborted) {
-        try {
-          const synthMsgId = `asst_${Date.now()}_synth`
-          const synthAssistantMsg: ChatMessage = {
-            id: synthMsgId,
-            role: 'assistant',
-            content: '',
-            isThinkingStreaming: false,
-            timestamp: Date.now()
-          }
-          this.messages.push(synthAssistantMsg)
-          lastAssistantMsg = synthAssistantMsg
-          this.emitFullState()
+      if (!hasFinalProse && !this.abortController.signal.aborted) {
+        const hadTools = collectedToolCalls.length > 0
+        const canReuseLastMsg = Boolean(
+          lastAssistantMsg &&
+            !(lastAssistantMsg.toolCalls && lastAssistantMsg.toolCalls.length > 0) &&
+            !lastAssistantMsg.content?.trim()
+        )
 
-          const synthMessages = this.buildOpenAIMessages(
+        const targetMsg: ChatMessage = canReuseLastMsg
+          ? lastAssistantMsg!
+          : {
+              id: `asst_${Date.now()}_synth`,
+              role: 'assistant',
+              content: '',
+              reasoningContent: '',
+              isThinkingStreaming: true,
+              timestamp: Date.now()
+            }
+
+        if (!canReuseLastMsg) {
+          this.messages.push(targetMsg)
+          lastAssistantMsg = targetMsg
+        } else {
+          targetMsg.isThinkingStreaming = true
+        }
+        this.emitFullState()
+
+        const existingReasoning = (targetMsg.reasoningContent || '').trim()
+        const existingDurationMs = targetMsg.thinkingDurationMs || 0
+        let synthError: Error | null = null
+
+        const runNoToolsDelivery = async (modelToUse: string, isRetryWithFast: boolean): Promise<void> => {
+          const passStart = Date.now()
+          let passFirstThinkingAt: number | null = null
+          let separatedPreviousReasoning = !existingReasoning
+
+          const deliveryMessages = this.buildOpenAIMessages(
             currentCfgForSynth.workspaceDir,
             currentCfgForSynth.permissionMode || 'default',
             effectiveQuery,
             recalledMemories,
-            currentCfgForSynth.mainModel,
-            synthMsgId
+            modelToUse,
+            targetMsg.id
           )
-          synthMessages.push({
-            role: 'user',
-            content:
-              '请根据前文通过工具读取并调研到的全部文档内容与事实细节，直接向用户交付完整的最终回答与深度分析报告（直接正面回应用户原始问题，提炼核心结论与关键要点，包含核心命题、架构创新、实验指标与工程评价，无需再调用工具）。'
-          })
+
+          const currentReasoning = (targetMsg.reasoningContent || '').trim()
+          if (hadTools) {
+            deliveryMessages.push({
+              role: 'user',
+              content:
+                '请直接根据前文通过工具获取到的全部真实结果与上下文信息，向用户交付完整、清晰的最终回答（如果用户要求编写代码、生成 SVG 或修改文件，请直接给出完整结果与说明；如果用户请求分析文档或调研问题，请提炼核心结论与关键要点）。不要再调用任何工具。'
+            })
+          } else if (currentReasoning) {
+            deliveryMessages.push({
+              role: 'user',
+              content: `你已完成内部思考过程，但尚未向用户输出最终正文交付内容。\n\n[已完成思考摘要]:\n${currentReasoning.slice(-4000)}\n\n请不要再重复长篇思考，立即依据上述思考结论直接向用户输出完整、可交付的最终回答！`
+            })
+          } else if (
+            isRetryWithFast ||
+            deliveryMessages[deliveryMessages.length - 1]?.role !== 'user'
+          ) {
+            deliveryMessages.push({
+              role: 'user',
+              content: effectiveQuery
+            })
+          }
 
           const synthResult = await this.llmClient.streamChatCompletion({
             baseUrl: currentCfgForSynth.baseUrl,
             apiKey: currentCfgForSynth.apiKey,
-            model: currentCfgForSynth.mainModel,
-            messages: synthMessages,
-            signal: this.abortController.signal,
+            model: modelToUse,
+            messages: deliveryMessages,
+            signal: this.abortController!.signal,
             proxyMode: currentCfgForSynth.proxyMode,
             proxyUrl: currentCfgForSynth.customProxyUrl,
             globalProxyUrl: currentCfgForSynth.globalProxyUrl,
-            onDelta: (delta) => {
-              if (delta.content) {
-                synthAssistantMsg.content += delta.content
-                this.emitUpdate({
-                  type: 'streaming_delta',
-                  streamingMessageId: synthMsgId,
-                  contentDelta: delta.content
-                })
+            onDelta: this.createStreamDeltaHandler(
+              targetMsg,
+              passStart,
+              () => passFirstThinkingAt,
+              (t) => {
+                passFirstThinkingAt = t
+              },
+              () => {
+                if (!separatedPreviousReasoning) {
+                  separatedPreviousReasoning = true
+                  return '\n\n'
+                }
+                return ''
               }
-            }
+            )
           })
 
+          const mergedReasoning = [existingReasoning, synthResult.reasoningContent.trim()]
+            .filter(Boolean)
+            .join('\n\n')
+          targetMsg.reasoningContent = mergedReasoning || undefined
           if (synthResult.content) {
-            synthAssistantMsg.content = synthResult.content
+            targetMsg.content = synthResult.content
+          }
+          targetMsg.isThinkingStreaming = false
+          if (targetMsg.reasoningContent) {
+            const passThinkMs = synthResult.reasoningContent
+              ? Math.max(200, Date.now() - (passFirstThinkingAt || passStart))
+              : 0
+            targetMsg.thinkingDurationMs =
+              Math.max(existingDurationMs + passThinkMs, targetMsg.thinkingDurationMs || 0) ||
+              undefined
           }
           this.emitFullState()
-        } catch (synthErr) {
-          console.error('Guaranteed synthesis error:', synthErr)
+        }
+
+        try {
+          await runNoToolsDelivery(currentCfgForSynth.mainModel, false)
+
+          const fastModel = (currentCfgForSynth.fastModel || '').trim()
+          const mainModel = (currentCfgForSynth.mainModel || '').trim()
+          if (
+            !targetMsg.content.trim() &&
+            !this.abortController.signal.aborted &&
+            fastModel &&
+            fastModel !== mainModel
+          ) {
+            targetMsg.isThinkingStreaming = true
+            this.emitFullState()
+            await runNoToolsDelivery(fastModel, true)
+          }
+        } catch (err) {
+          const isSynthAbort =
+            this.abortController.signal.aborted ||
+            (err as Error).name === 'AbortError' ||
+            (err as Error).message?.includes('abort')
+          if (isSynthAbort) {
+            throw err
+          }
+          synthError = err as Error
+          console.error('Guaranteed delivery error:', synthError)
+        } finally {
+          targetMsg.isThinkingStreaming = false
+          targetMsg.reasoningContent = targetMsg.reasoningContent?.trim() ? targetMsg.reasoningContent : undefined
+          if (targetMsg.reasoningContent && !targetMsg.thinkingDurationMs) {
+            targetMsg.thinkingDurationMs = Math.max(200, Date.now() - targetMsg.timestamp)
+          }
+        }
+
+        if (!this.abortController.signal.aborted && !targetMsg.content.trim()) {
+          if (synthError) {
+            targetMsg.content = `⚠️ 思考/执行已完成，但在生成最终回复时发生异常: ${synthError.message}`
+          } else if (targetMsg.reasoningContent?.trim()) {
+            targetMsg.content =
+              '⚠️ 模型已完成思考（可展开上方「已思考」查看推理过程），但未继续输出最终正文交付内容（可能是模型输出长度受限或流式提前结束）。请点击下方按钮直接生成回答或切换模型重试。'
+          } else {
+            targetMsg.content =
+              '⚠️ 本次请求未从模型收到任何有效内容（可能接口流式提前断开、响应卡滞或返回格式不兼容）。请检查右上角模型配置与网络状态后重试。'
+          }
+          this.emitFullState()
         }
       }
 
@@ -675,6 +775,9 @@ export class QueryEngine {
             lastAssistantMsg.thinkingDurationMs = Math.max(200, Date.now() - lastAssistantMsg.timestamp)
           }
         }
+        lastAssistantMsg.reasoningContent = lastAssistantMsg.reasoningContent?.trim()
+          ? lastAssistantMsg.reasoningContent
+          : undefined
         if (isAbort) {
           lastAssistantMsg.interrupted = true
         }
@@ -690,6 +793,24 @@ export class QueryEngine {
       }
       this.emitFullState()
     } finally {
+      let finalized = false
+      const now = Date.now()
+      for (const msg of this.messages) {
+        if (msg.isThinkingStreaming) {
+          msg.isThinkingStreaming = false
+          if (!msg.thinkingDurationMs) {
+            msg.thinkingDurationMs = Math.max(200, now - (msg.timestamp || now))
+          }
+          finalized = true
+        }
+        if (msg.reasoningContent === '') {
+          msg.reasoningContent = undefined
+        }
+      }
+      if (finalized) {
+        this.emitFullState()
+      }
+      this.abortController = null
       this.setBusy(false)
     }
   }
@@ -703,6 +824,7 @@ export class QueryEngine {
     recalledMemories: RecalledMemoryItem[]
   ): Promise<void> {
     this.setBusy(true)
+    this.abortController = new AbortController()
     const cfg = this.configStore.getConfig()
     const mode = cfg.permissionMode || 'default'
 
@@ -720,75 +842,130 @@ export class QueryEngine {
     this.messages.push(asstMsg)
     this.emitFullState()
 
-    const urlMatch = userText.match(/https?:\/\/github\.com\/[^\s]+/)
-    const isInstallSkillIntent = /(装载|安装|创建|添加).*skill/i.test(userText) || Boolean(urlMatch)
-    const explicitSkills = this.skillManager?.findMentionedSkills(userText) || []
+    try {
+      const urlMatch = userText.match(/https?:\/\/github\.com\/[^\s]+/)
+      const isInstallSkillIntent = /(装载|安装|创建|添加).*skill/i.test(userText) || Boolean(urlMatch)
+      const explicitSkills = this.skillManager?.findMentionedSkills(userText) || []
 
-    const thoughtSteps = [
-      `正在解析用户指令: "${userText}"\n`,
-      ...(explicitSkills.length > 0
-        ? [
-            `🎯 检测到用户显式指定技能 [${explicitSkills.map((s) => `@${s.name}`).join(', ')}]：已强锁定为第一优先级执行准则，正在注入其领域完整规范与工具链编排...\n`
-          ]
-        : []),
-      recalledMemories.length > 0
-        ? `已从 L1-L5 分层记忆库召回 ${recalledMemories.length} 条相关记忆 (${recalledMemories.map((m) => m.layer).join(', ')}) 作为先验约束...\n`
-        : `检查当前工作区上下文 (${cfg.workspaceDir}) 与激活模式 [${mode}]...\n`,
-      isInstallSkillIntent
-        ? `检测到 Skill 装载意图：准备调用 install_skill 工具写入 .claude-desktop/skills/ 并实时同步到左侧 Skills 页面。\n`
-        : mode === 'plan'
-          ? `当前处于 Plan Mode（只读规划模式）：仅调用 search_files 调研代码结构，不执行任何写入或副作用命令。\n`
-          : `准备调用只读工具 search_files 扫描项目结构并汇报。`
-    ]
+      const thoughtSteps = [
+        `正在解析用户指令: "${userText}"\n`,
+        ...(explicitSkills.length > 0
+          ? [
+              `🎯 检测到用户显式指定技能 [${explicitSkills.map((s) => `@${s.name}`).join(', ')}]：已强锁定为第一优先级执行准则，正在注入其领域完整规范与工具链编排...\n`
+            ]
+          : []),
+        recalledMemories.length > 0
+          ? `已从 L1-L5 分层记忆库召回 ${recalledMemories.length} 条相关记忆 (${recalledMemories.map((m) => m.layer).join(', ')}) 作为先验约束...\n`
+          : `检查当前工作区上下文 (${cfg.workspaceDir}) 与激活模式 [${mode}]...\n`,
+        isInstallSkillIntent
+          ? `检测到 Skill 装载意图：准备调用 install_skill 工具写入 .claude-desktop/skills/ 并实时同步到左侧 Skills 页面。\n`
+          : mode === 'plan'
+            ? `当前处于 Plan Mode（只读规划模式）：仅调用 search_files 调研代码结构，不执行任何写入或副作用命令。\n`
+            : `准备调用只读工具 search_files 扫描项目结构并汇报。`
+      ]
 
-    for (const chunk of thoughtSteps) {
-      if (!this.isBusy || this.abortController === null) {
-        asstMsg.isThinkingStreaming = false
-        asstMsg.interrupted = true
-        asstMsg.thinkingDurationMs = Math.max(200, Date.now() - thinkStart)
-        this.emitFullState()
-        return
+      for (const chunk of thoughtSteps) {
+        if (!this.isBusy || this.abortController === null || this.abortController.signal.aborted) {
+          asstMsg.isThinkingStreaming = false
+          asstMsg.interrupted = true
+          asstMsg.thinkingDurationMs = Math.max(200, Date.now() - thinkStart)
+          this.emitFullState()
+          return
+        }
+        await new Promise((r) => setTimeout(r, 420))
+        if (!this.isBusy || this.abortController === null || this.abortController.signal.aborted) {
+          asstMsg.isThinkingStreaming = false
+          asstMsg.interrupted = true
+          asstMsg.thinkingDurationMs = Math.max(200, Date.now() - thinkStart)
+          this.emitFullState()
+          return
+        }
+        asstMsg.reasoningContent = (asstMsg.reasoningContent || '') + chunk
+        this.emitUpdate({
+          type: 'streaming_delta',
+          streamingMessageId: asstId,
+          reasoningDelta: chunk,
+          outputTokenDelta: this.compactPipeline.estimateTokens(chunk)
+        })
       }
-      await new Promise((r) => setTimeout(r, 420))
-      if (!this.isBusy || this.abortController === null) {
-        asstMsg.isThinkingStreaming = false
-        asstMsg.interrupted = true
-        asstMsg.thinkingDurationMs = Math.max(200, Date.now() - thinkStart)
-        this.emitFullState()
-        return
-      }
-      asstMsg.reasoningContent = (asstMsg.reasoningContent || '') + chunk
+
+      await new Promise((r) => setTimeout(r, 320))
+      asstMsg.isThinkingStreaming = false
+      asstMsg.thinkingDurationMs = Date.now() - thinkStart
       this.emitUpdate({
         type: 'streaming_delta',
         streamingMessageId: asstId,
-        reasoningDelta: chunk
+        thinkingFinished: true,
+        thinkingDurationMs: asstMsg.thinkingDurationMs
       })
-    }
 
-    await new Promise((r) => setTimeout(r, 320))
-    asstMsg.isThinkingStreaming = false
-    asstMsg.thinkingDurationMs = Date.now() - thinkStart
+      if (isInstallSkillIntent && this.skillManager) {
+        const installCallId = `call_skill_${Date.now()}`
+        const skillArgs = urlMatch
+          ? {
+              name: urlMatch[0].split('/').pop() || 'github-imported-skill',
+              source_url: urlMatch[0],
+              category: 'security'
+            }
+          : {
+              name: userText.slice(0, 24),
+              category: 'custom',
+              summary: `根据对话指令「${userText.slice(0, 40)}」定制装载的智能体技能`
+            }
 
-    if (isInstallSkillIntent && this.skillManager) {
-      const installCallId = `call_skill_${Date.now()}`
-      const skillArgs = urlMatch
-        ? {
-            name: urlMatch[0].split('/').pop() || 'github-imported-skill',
-            source_url: urlMatch[0],
-            category: 'security'
+        asstMsg.content = `正在为您装载 Skill 到本地技能库：`
+        asstMsg.toolCalls = [
+          {
+            id: installCallId,
+            name: 'install_skill',
+            argumentsJson: JSON.stringify(skillArgs),
+            status: 'running',
+            permissionLevel: 'readonly',
+            startedAt: Date.now()
           }
-        : {
-            name: userText.slice(0, 24),
-            category: 'custom',
-            summary: `根据对话指令「${userText.slice(0, 40)}」定制装载的智能体技能`
-          }
+        ]
+        this.emitFullState()
 
-      asstMsg.content = `正在为您装载 Skill 到本地技能库：`
+        const installTool = this.toolRegistry.getTool('install_skill')!
+        const out = await installTool.execute(
+          skillArgs,
+          { workspaceDir: cfg.workspaceDir, skillManager: this.skillManager },
+          installCallId
+        )
+        asstMsg.toolCalls[0].status = 'completed'
+        asstMsg.toolCalls[0].resultOutput = out
+        asstMsg.toolCalls[0].completedAt = Date.now()
+        this.appendToolMessage(installCallId, 'install_skill', out)
+
+        const summaryMsg: ChatMessage = {
+          id: `demo_skill_done_${Date.now()}`,
+          role: 'assistant',
+          content: `已完成 Skill 装载！你现在可以点击左侧边栏的 **Skills** 菜单，查看该技能的详细原理解释、能力清单以及一键可运行的使用示例。`,
+          timestamp: Date.now()
+        }
+        this.messages.push(summaryMsg)
+        if (this.memoryEngine) {
+          const cryst = await this.memoryEngine.autoCrystallizeTurn(
+            userText,
+            summaryMsg.content,
+            asstMsg.toolCalls
+          )
+          if (cryst.length > 0) summaryMsg.crystallizedMemories = cryst
+        }
+        this.emitFullState()
+        return
+      }
+
+      const searchCallId = `call_search_${Date.now()}`
+      asstMsg.content =
+        mode === 'plan'
+          ? `已根据 **Plan Mode（只读规划模式）** 完成工作区调研：`
+          : `已完成记忆回调与工作区扫描（右上角填入 API Key 即可连接真实大模型）：`
       asstMsg.toolCalls = [
         {
-          id: installCallId,
-          name: 'install_skill',
-          argumentsJson: JSON.stringify(skillArgs),
+          id: searchCallId,
+          name: 'search_files',
+          argumentsJson: JSON.stringify({ query: '' }),
           status: 'running',
           permissionLevel: 'readonly',
           startedAt: Date.now()
@@ -796,76 +973,38 @@ export class QueryEngine {
       ]
       this.emitFullState()
 
-      const installTool = this.toolRegistry.getTool('install_skill')!
-      const out = await installTool.execute(
-        skillArgs,
-        { workspaceDir: cfg.workspaceDir, skillManager: this.skillManager },
-        installCallId
+      const searchTool = this.toolRegistry.getTool('search_files')!
+      const searchOut = await searchTool.execute(
+        {},
+        { workspaceDir: cfg.workspaceDir },
+        searchCallId
       )
       asstMsg.toolCalls[0].status = 'completed'
-      asstMsg.toolCalls[0].resultOutput = out
+      asstMsg.toolCalls[0].resultOutput = searchOut
       asstMsg.toolCalls[0].completedAt = Date.now()
-      this.appendToolMessage(installCallId, 'install_skill', out)
+      this.appendToolMessage(searchCallId, 'search_files', searchOut)
 
-      const summaryMsg: ChatMessage = {
-        id: `demo_skill_done_${Date.now()}`,
-        role: 'assistant',
-        content: `已完成 Skill 装载！你现在可以点击左侧边栏的 **Skills** 菜单，查看该技能的详细原理解释、能力清单以及一键可运行的使用示例。`,
-        timestamp: Date.now()
-      }
-      this.messages.push(summaryMsg)
       if (this.memoryEngine) {
         const cryst = await this.memoryEngine.autoCrystallizeTurn(
           userText,
-          summaryMsg.content,
+          asstMsg.content,
           asstMsg.toolCalls
         )
-        if (cryst.length > 0) summaryMsg.crystallizedMemories = cryst
+        if (cryst.length > 0) asstMsg.crystallizedMemories = cryst
       }
-      this.setBusy(false)
+
       this.emitFullState()
-      return
-    }
-
-    const searchCallId = `call_search_${Date.now()}`
-    asstMsg.content =
-      mode === 'plan'
-        ? `已根据 **Plan Mode（只读规划模式）** 完成工作区调研：`
-        : `已完成记忆回调与工作区扫描（右上角填入 API Key 即可连接真实大模型）：`
-    asstMsg.toolCalls = [
-      {
-        id: searchCallId,
-        name: 'search_files',
-        argumentsJson: JSON.stringify({ query: '' }),
-        status: 'running',
-        permissionLevel: 'readonly',
-        startedAt: Date.now()
+    } finally {
+      if (asstMsg.isThinkingStreaming) {
+        asstMsg.isThinkingStreaming = false
+        if (!asstMsg.thinkingDurationMs) {
+          asstMsg.thinkingDurationMs = Math.max(200, Date.now() - thinkStart)
+        }
+        this.emitFullState()
       }
-    ]
-    this.emitFullState()
-
-    const searchTool = this.toolRegistry.getTool('search_files')!
-    const searchOut = await searchTool.execute(
-      {},
-      { workspaceDir: cfg.workspaceDir },
-      searchCallId
-    )
-    asstMsg.toolCalls[0].status = 'completed'
-    asstMsg.toolCalls[0].resultOutput = searchOut
-    asstMsg.toolCalls[0].completedAt = Date.now()
-    this.appendToolMessage(searchCallId, 'search_files', searchOut)
-
-    if (this.memoryEngine) {
-      const cryst = await this.memoryEngine.autoCrystallizeTurn(
-        userText,
-        asstMsg.content,
-        asstMsg.toolCalls
-      )
-      if (cryst.length > 0) asstMsg.crystallizedMemories = cryst
+      this.abortController = null
+      this.setBusy(false)
     }
-
-    this.setBusy(false)
-    this.emitFullState()
   }
 
   private appendToolMessage(toolCallId: string, toolName: string, content: string): void {
@@ -1056,16 +1195,20 @@ export class QueryEngine {
         : undefined
     })
 
-    // Find latest user message to attach turnDynamicContext
+    // Find latest user message to attach turnDynamicContext and identify active turn boundary
+    let latestUserIdx = -1
     let latestUserMsgId: string | null = null
     for (let i = this.messages.length - 1; i >= 0; i--) {
       if (this.messages[i].role === 'user') {
+        latestUserIdx = i
         latestUserMsgId = this.messages[i].id
         break
       }
     }
+    const supportsIntraTurnReasoning = /deepseek|reasoner/i.test(modelName)
 
-    for (const msg of this.messages) {
+    for (let msgIdx = 0; msgIdx < this.messages.length; msgIdx++) {
+      const msg = this.messages[msgIdx]
       // Exclude placeholder currently being generated in this turn
       if (currentAssistantMsgId && msg.id === currentAssistantMsgId) continue
 
@@ -1102,9 +1245,14 @@ export class QueryEngine {
         }
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
+          const includeReasoning =
+            supportsIntraTurnReasoning &&
+            msgIdx > latestUserIdx &&
+            Boolean(msg.reasoningContent?.trim())
           payload.push({
             role: 'assistant',
             content: msg.content || null,
+            ...(includeReasoning ? { reasoning_content: msg.reasoningContent } : {}),
             tool_calls: msg.toolCalls.map((tc) => ({
               id: tc.id,
               type: 'function',
@@ -1162,6 +1310,74 @@ export class QueryEngine {
     }
 
     return payload
+  }
+
+  private createStreamDeltaHandler(
+    targetMsg: ChatMessage,
+    turnStart: number,
+    getFirstThinkingAt: () => number | null,
+    setFirstThinkingAt: (t: number) => void,
+    getReasoningPrefix?: () => string
+  ) {
+    return (delta: {
+      content?: string
+      reasoning?: string
+      toolCalling?: boolean
+      toolArgsDelta?: string
+      usageCompletionTokens?: number
+    }): void => {
+      if (this.abortController?.signal.aborted || targetMsg.interrupted) {
+        return
+      }
+      const wasThinkingStreaming = Boolean(targetMsg.isThinkingStreaming)
+      let emittedReasoning = delta.reasoning
+
+      if (delta.reasoning) {
+        if (!getFirstThinkingAt()) setFirstThinkingAt(Date.now())
+        const prefix = getReasoningPrefix ? getReasoningPrefix() : ''
+        emittedReasoning = prefix ? prefix + delta.reasoning : delta.reasoning
+        targetMsg.reasoningContent = (targetMsg.reasoningContent || '') + emittedReasoning
+        targetMsg.isThinkingStreaming =
+          !targetMsg.content && !(targetMsg.toolCalls && targetMsg.toolCalls.length > 0)
+      }
+
+      if (delta.content) {
+        if (targetMsg.isThinkingStreaming) {
+          targetMsg.isThinkingStreaming = false
+          targetMsg.thinkingDurationMs = Math.max(
+            200,
+            Date.now() - (getFirstThinkingAt() || turnStart)
+          )
+        }
+        targetMsg.content += delta.content
+      }
+
+      if (delta.toolCalling && targetMsg.isThinkingStreaming) {
+        targetMsg.isThinkingStreaming = false
+        targetMsg.thinkingDurationMs = Math.max(
+          200,
+          Date.now() - (getFirstThinkingAt() || turnStart)
+        )
+      }
+
+      const deltaText =
+        (emittedReasoning || '') + (delta.content || '') + (delta.toolArgsDelta || '')
+      const outputTokenDelta = deltaText ? this.compactPipeline.estimateTokens(deltaText) : 0
+
+      this.emitUpdate({
+        type: 'streaming_delta',
+        streamingMessageId: targetMsg.id,
+        contentDelta: delta.content,
+        reasoningDelta: emittedReasoning,
+        thinkingFinished: wasThinkingStreaming && !targetMsg.isThinkingStreaming,
+        thinkingDurationMs: targetMsg.thinkingDurationMs,
+        toolCalling: delta.toolCalling,
+        ...(outputTokenDelta > 0 ? { outputTokenDelta } : {}),
+        ...(delta.usageCompletionTokens !== undefined
+          ? { usageOutputTokens: delta.usageCompletionTokens }
+          : {})
+      })
+    }
   }
 
   private setBusy(busy: boolean): void {

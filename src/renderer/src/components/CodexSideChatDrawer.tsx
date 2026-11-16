@@ -25,6 +25,7 @@ import { AttachmentContextMenu } from './AttachmentContextMenu'
 import { isKnowledgeBaseCompatibleAttachment } from '../utils/attachmentUtils'
 import {
   ClaudeAsteriskGlyph,
+  ClaudeLiveStatusRow,
   ClaudeTerminalOutput,
   ClaudeThinkingBlock
 } from './ClaudeActivityElements'
@@ -601,6 +602,7 @@ export const CodexSideChatDrawer: React.FC = () => {
                       <ClaudeThinkingBlock
                         reasoningContent={msg.reasoningContent}
                         isStreaming={Boolean(isSideChatBusy && !msg.content && isLastAssistant)}
+                        durationMs={msg.thinkingDurationMs}
                       />
                     )}
 
@@ -608,15 +610,43 @@ export const CodexSideChatDrawer: React.FC = () => {
                     <div className="relative bg-[#FAFAFC] border border-black/[0.07] rounded-2xl rounded-tl-sm p-3.5 text-[13px] text-[#1d1d1f] shadow-[0_2px_8px_rgba(0,0,0,0.02)]">
                       {msg.content ? (
                         <div>
-                          <ClaudeTerminalOutput content={msg.content} />
-                          {isSideChatBusy && isLastAssistant && (
-                            <span className="inline-block w-1.5 h-3.5 ml-1 align-middle bg-[#5856D6] animate-pulse rounded-sm" />
-                          )}
+                          <ClaudeTerminalOutput
+                            content={msg.content}
+                            isStreaming={Boolean(isSideChatBusy && isLastAssistant)}
+                          />
                         </div>
+                      ) : isSideChatBusy && isLastAssistant ? (
+                        <ClaudeLiveStatusRow
+                          compact
+                          phase="thinking"
+                          startedAt={msg.timestamp}
+                          tokenCount={
+                            msg.reasoningContent
+                              ? Math.max(1, Math.ceil(msg.reasoningContent.length * 0.35))
+                              : 0
+                          }
+                          onInterrupt={abortSideChat}
+                        />
                       ) : (
-                        <div className="flex items-center gap-2 text-[#86868b] font-mono text-[12px] py-1">
-                          <ClaudeAsteriskGlyph active />
-                          <span>侧边思考生成中…</span>
+                        <div className="text-[12px] text-[#86868b] font-sans py-0.5">
+                          (无正文返回内容)
+                        </div>
+                      )}
+
+                      {msg.content && isSideChatBusy && isLastAssistant && (
+                        <div className="mt-1.5 pt-1.5 border-t border-black/[0.05]">
+                          <ClaudeLiveStatusRow
+                            compact
+                            phase="responding"
+                            startedAt={msg.timestamp}
+                            tokenCount={Math.max(
+                              1,
+                              Math.ceil(
+                                ((msg.reasoningContent?.length || 0) + msg.content.length) * 0.35
+                              )
+                            )}
+                            onInterrupt={abortSideChat}
+                          />
                         </div>
                       )}
 

@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Plus,
   Search,
   FolderGit2,
   FolderPlus,
   Pin,
+  PinOff,
+  Pencil,
   X,
   ChevronDown,
   ChevronRight,
@@ -36,13 +39,48 @@ const ThreadRow: React.FC<{
   isActive: boolean
   hasDraft?: boolean
   projectBadge?: string
+  isRenaming?: boolean
+  renameValue?: string
+  onRenameChange?: (value: string) => void
+  onCommitRename?: () => void
+  onCancelRename?: () => void
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void
   onSelect: () => void
   onPin: () => void
   onArchive: () => void
-}> = ({ thread, isActive, hasDraft, projectBadge, onSelect, onPin, onArchive }) => {
+}> = ({
+  thread,
+  isActive,
+  hasDraft,
+  projectBadge,
+  isRenaming,
+  renameValue,
+  onRenameChange,
+  onCommitRename,
+  onCancelRename,
+  onContextMenu,
+  onSelect,
+  onPin,
+  onArchive
+}) => {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const isComposingRef = useRef(false)
+
+  useEffect(() => {
+    if (!isRenaming) return
+    const rafId = requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    })
+    return () => cancelAnimationFrame(rafId)
+  }, [isRenaming])
+
   return (
     <div
-      onClick={onSelect}
+      onClick={() => {
+        if (!isRenaming) onSelect()
+      }}
+      onContextMenu={onContextMenu}
       className={`group relative px-3 py-2.5 rounded-[18px] cursor-pointer flex items-start gap-2.5 transition-all duration-200 ease-out ${
         isActive
           ? 'apple-glass-bubble text-[#1d1d1f]'
@@ -65,37 +103,72 @@ const ThreadRow: React.FC<{
       {/* Title & Metadata */}
       <div className="flex-1 min-w-0 relative z-10">
         <div className="flex items-center justify-between gap-1">
-          <span className="text-[12.5px] font-medium truncate leading-snug text-[#1d1d1f] tracking-tight">
-            {thread.title}
-          </span>
-          <div className="relative flex items-center justify-end shrink-0 min-w-[36px] h-4">
-            <span className="text-[10.5px] text-[#86868b] font-mono transition-opacity duration-150 group-hover:opacity-0 pointer-events-none">
-              {formatRelativeTime(thread.updatedAt)}
-            </span>
-            <div
+          {isRenaming ? (
+            <input
+              ref={inputRef}
+              type="text"
+              value={renameValue ?? ''}
+              maxLength={80}
+              onChange={(e) => onRenameChange?.(e.target.value)}
               onClick={(e) => e.stopPropagation()}
-              className="absolute right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-            >
-              <button
-                type="button"
-                onClick={onPin}
-                title={thread.pinned ? '取消置顶' : '置顶线程'}
-                className={`p-1 rounded-md hover:bg-black/[0.08] transition-colors ${
-                  thread.pinned ? 'text-[#0071e3]' : 'text-[#86868b]'
-                }`}
-              >
-                <Pin className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={onArchive}
-                title="归档移除"
-                className="p-1 rounded-md hover:bg-black/[0.08] text-[#86868b] hover:text-[#FF3B30] transition-colors"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
+              onMouseDown={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.stopPropagation()}
+              onCompositionStart={() => {
+                isComposingRef.current = true
+              }}
+              onCompositionEnd={() => {
+                isComposingRef.current = false
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !isComposingRef.current && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onCommitRename?.()
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onCancelRename?.()
+                }
+              }}
+              onBlur={() => onCommitRename?.()}
+              placeholder="输入线程名称..."
+              className="w-full px-1.5 py-0.5 rounded-md bg-white border border-[#0071e3]/60 ring-2 ring-[#0071e3]/15 text-[12.5px] font-medium text-[#1d1d1f] leading-snug tracking-tight focus:outline-none select-text"
+            />
+          ) : (
+            <>
+              <span className="text-[12.5px] font-medium truncate leading-snug text-[#1d1d1f] tracking-tight">
+                {thread.title}
+              </span>
+              <div className="relative flex items-center justify-end shrink-0 min-w-[36px] h-4">
+                <span className="text-[10.5px] text-[#86868b] font-mono transition-opacity duration-150 group-hover:opacity-0 pointer-events-none">
+                  {formatRelativeTime(thread.updatedAt)}
+                </span>
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+                >
+                  <button
+                    type="button"
+                    onClick={onPin}
+                    title={thread.pinned ? '取消置顶' : '置顶线程'}
+                    className={`p-1 rounded-md hover:bg-black/[0.08] transition-colors ${
+                      thread.pinned ? 'text-[#0071e3]' : 'text-[#86868b]'
+                    }`}
+                  >
+                    <Pin className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onArchive}
+                    title="归档移除"
+                    className="p-1 rounded-md hover:bg-black/[0.08] text-[#86868b] hover:text-[#FF3B30] transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5 mt-0.5 text-[10.5px] text-[#86868b] truncate">
@@ -131,6 +204,155 @@ const ThreadRow: React.FC<{
   )
 }
 
+function isPointInsideRoundedRect(
+  clientX: number,
+  clientY: number,
+  rect: DOMRect,
+  radius: number
+): boolean {
+  if (
+    clientX < rect.left ||
+    clientX > rect.right ||
+    clientY < rect.top ||
+    clientY > rect.bottom
+  ) {
+    return false
+  }
+  const r = Math.min(radius, rect.width / 2, rect.height / 2)
+  const dx =
+    clientX < rect.left + r
+      ? rect.left + r - clientX
+      : clientX > rect.right - r
+        ? clientX - (rect.right - r)
+        : 0
+  const dy =
+    clientY < rect.top + r
+      ? rect.top + r - clientY
+      : clientY > rect.bottom - r
+        ? clientY - (rect.bottom - r)
+        : 0
+  return dx * dx + dy * dy <= r * r
+}
+
+const ThreadContextMenu: React.FC<{
+  x: number
+  y: number
+  thread: CodexThread
+  onClose: () => void
+  onRename: () => void
+  onTogglePin: () => void
+  onArchive: () => void
+}> = ({ x, y, thread, onClose, onRename, onTogglePin, onArchive }) => {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: x, top: y })
+
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!el) {
+      setPos({ left: x, top: y })
+      return
+    }
+    const rect = el.getBoundingClientRect()
+    const nextLeft =
+      x + rect.width + 8 <= window.innerWidth
+        ? Math.max(8, x)
+        : Math.max(8, window.innerWidth - rect.width - 8)
+    const nextTop =
+      y + rect.height + 8 <= window.innerHeight
+        ? Math.max(8, y)
+        : Math.max(8, window.innerHeight - rect.height - 8)
+    setPos({ left: nextLeft, top: nextTop })
+  }, [x, y])
+
+  useEffect(() => {
+    const handlePointerDown = (e: MouseEvent): void => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        onClose()
+      }
+    }
+    const handleDismiss = (): void => {
+      onClose()
+    }
+    window.addEventListener('mousedown', handlePointerDown, true)
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('blur', handleDismiss)
+    window.addEventListener('scroll', handleDismiss, true)
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown, true)
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('blur', handleDismiss)
+      window.removeEventListener('scroll', handleDismiss, true)
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      style={{ left: pos.left, top: pos.top }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      className="fixed z-50 min-w-[180px] bg-white/95 backdrop-blur-2xl border border-black/[0.1] rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.18)] p-1.5 animate-apple-menu origin-top-left select-none text-[12.5px]"
+    >
+      <div className="px-2.5 py-1 border-b border-black/[0.06] mb-1">
+        <div
+          className="text-[11px] font-semibold text-[#86868b] truncate max-w-[180px]"
+          title={thread.title}
+        >
+          {thread.title}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => {
+          onClose()
+          onRename()
+        }}
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-[#1d1d1f] hover:bg-[#0071e3] hover:text-white transition-colors cursor-pointer group"
+      >
+        <Pencil className="w-3.5 h-3.5 text-[#0071e3] group-hover:text-white transition-colors" />
+        <span className="font-medium">手动改名</span>
+      </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          onClose()
+          onTogglePin()
+        }}
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-[#3a3a3c] hover:bg-black/[0.05] transition-colors cursor-pointer mt-0.5"
+      >
+        {thread.pinned ? (
+          <PinOff className="w-3.5 h-3.5 text-[#86868b]" />
+        ) : (
+          <Pin className="w-3.5 h-3.5 text-[#86868b]" />
+        )}
+        <span>{thread.pinned ? '取消置顶' : '置顶线程'}</span>
+      </button>
+
+      <div className="my-1 border-t border-black/[0.06]" />
+
+      <button
+        type="button"
+        onClick={() => {
+          onClose()
+          onArchive()
+        }}
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-[#FF3B30] hover:bg-[#FF3B30]/10 transition-colors cursor-pointer"
+      >
+        <X className="w-3.5 h-3.5" />
+        <span>归档移除</span>
+      </button>
+    </div>,
+    document.body
+  )
+}
+
 /**
  * Full OpenAI Codex Desktop Left Sidebar Replica for Feature A:
  * - New Thread (`⌘N`) + Add Folder Project (`⌘O`)
@@ -154,6 +376,7 @@ export const CodexSidebar: React.FC = () => {
     knowledgeDocs,
     createNewThread,
     switchThread,
+    renameThread,
     togglePinThread,
     archiveThread,
     addProjectFolder,
@@ -165,6 +388,37 @@ export const CodexSidebar: React.FC = () => {
   const [filterQuery, setFilterQuery] = useState('')
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
   const [projectToDelete, setProjectToDelete] = useState<WorkspaceProject | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    threadId: string
+    x: number
+    y: number
+  } | null>(null)
+  const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+
+  const startRenaming = (thread: CodexThread): void => {
+    setRenamingThreadId(thread.id)
+    setRenameValue(thread.title)
+  }
+
+  const commitRename = (): void => {
+    if (!renamingThreadId) return
+    const trimmed = renameValue.trim()
+    if (trimmed) {
+      renameThread(renamingThreadId, trimmed)
+    }
+    setRenamingThreadId(null)
+    setRenameValue('')
+  }
+
+  const cancelRename = (): void => {
+    setRenamingThreadId(null)
+    setRenameValue('')
+  }
+
+  const contextMenuThread = contextMenu
+    ? threads.find((t) => t.id === contextMenu.threadId) || null
+    : null
 
   useEffect(() => {
     if (!projectToDelete) return
@@ -233,6 +487,39 @@ export const CodexSidebar: React.FC = () => {
       [folderPath]: !prev[folderPath]
     }))
   }
+
+  const renderThreadRow = (t: CodexThread, showProjectBadge = false): React.ReactNode => (
+    <ThreadRow
+      key={t.id}
+      thread={t}
+      isActive={workbenchSubView === 'chat' && t.id === activeThreadId}
+      hasDraft={Boolean(
+        threadDrafts[t.id]?.text ||
+        (threadDrafts[t.id]?.attachments && threadDrafts[t.id].attachments.length > 0)
+      )}
+      projectBadge={
+        showProjectBadge && projects.length > 1
+          ? t.workspaceDir.split('/').filter(Boolean).pop()
+          : undefined
+      }
+      isRenaming={renamingThreadId === t.id}
+      renameValue={renamingThreadId === t.id ? renameValue : undefined}
+      onRenameChange={setRenameValue}
+      onCommitRename={commitRename}
+      onCancelRename={cancelRename}
+      onContextMenu={(e) => {
+        if (renamingThreadId === t.id) return
+        const rect = e.currentTarget.getBoundingClientRect()
+        if (!isPointInsideRoundedRect(e.clientX, e.clientY, rect, 18)) return
+        e.preventDefault()
+        e.stopPropagation()
+        setContextMenu({ threadId: t.id, x: e.clientX, y: e.clientY })
+      }}
+      onSelect={() => switchThread(t.id)}
+      onPin={() => togglePinThread(t.id)}
+      onArchive={() => archiveThread(t.id)}
+    />
+  )
 
   return (
     <>
@@ -374,25 +661,7 @@ export const CodexSidebar: React.FC = () => {
                 </span>
               </div>
 
-              {activeAttentionThreads.map((t) => (
-                <ThreadRow
-                  key={t.id}
-                  thread={t}
-                  isActive={workbenchSubView === 'chat' && t.id === activeThreadId}
-                  hasDraft={Boolean(
-                    threadDrafts[t.id]?.text ||
-                    (threadDrafts[t.id]?.attachments && threadDrafts[t.id].attachments.length > 0)
-                  )}
-                  projectBadge={
-                    projects.length > 1
-                      ? t.workspaceDir.split('/').filter(Boolean).pop()
-                      : undefined
-                  }
-                  onSelect={() => switchThread(t.id)}
-                  onPin={() => togglePinThread(t.id)}
-                  onArchive={() => archiveThread(t.id)}
-                />
-              ))}
+              {activeAttentionThreads.map((t) => renderThreadRow(t, true))}
 
               {runningSwarmTasks > 0 && (
                 <button
@@ -418,25 +687,7 @@ export const CodexSidebar: React.FC = () => {
               <div className="px-2 text-[10.5px] font-semibold uppercase tracking-wider text-[#86868b]">
                 置顶线程
               </div>
-              {pinnedThreads.map((t) => (
-                <ThreadRow
-                  key={t.id}
-                  thread={t}
-                  isActive={workbenchSubView === 'chat' && t.id === activeThreadId}
-                  hasDraft={Boolean(
-                    threadDrafts[t.id]?.text ||
-                    (threadDrafts[t.id]?.attachments && threadDrafts[t.id].attachments.length > 0)
-                  )}
-                  projectBadge={
-                    projects.length > 1
-                      ? t.workspaceDir.split('/').filter(Boolean).pop()
-                      : undefined
-                  }
-                  onSelect={() => switchThread(t.id)}
-                  onPin={() => togglePinThread(t.id)}
-                  onArchive={() => archiveThread(t.id)}
-                />
-              ))}
+              {pinnedThreads.map((t) => renderThreadRow(t, true))}
             </div>
           )}
 
@@ -548,20 +799,7 @@ export const CodexSidebar: React.FC = () => {
                           <span>在此文件夹启动首个线程</span>
                         </button>
                       ) : (
-                        folderThreads.map((t) => (
-                          <ThreadRow
-                            key={t.id}
-                            thread={t}
-                            isActive={workbenchSubView === 'chat' && t.id === activeThreadId}
-                            hasDraft={Boolean(
-                              threadDrafts[t.id]?.text ||
-                              (threadDrafts[t.id]?.attachments && threadDrafts[t.id].attachments.length > 0)
-                            )}
-                            onSelect={() => switchThread(t.id)}
-                            onPin={() => togglePinThread(t.id)}
-                            onArchive={() => archiveThread(t.id)}
-                          />
-                        ))
+                        folderThreads.map((t) => renderThreadRow(t, false))
                       )}
                     </div>
                   )}
@@ -585,6 +823,20 @@ export const CodexSidebar: React.FC = () => {
         </div>
       </div>
     </aside>
+
+    {/* 线程右键上下文菜单 */}
+    {contextMenu && contextMenuThread && (
+      <ThreadContextMenu
+        key={`${contextMenuThread.id}-${contextMenu.x}-${contextMenu.y}`}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        thread={contextMenuThread}
+        onClose={() => setContextMenu(null)}
+        onRename={() => startRenaming(contextMenuThread)}
+        onTogglePin={() => togglePinThread(contextMenuThread.id)}
+        onArchive={() => archiveThread(contextMenuThread.id)}
+      />
+    )}
 
     {/* 移除项目二次确认弹窗 */}
     {projectToDelete && (

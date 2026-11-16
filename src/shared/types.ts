@@ -485,6 +485,11 @@ export interface StreamUpdatePayload {
   streamingMessageId?: string
   contentDelta?: string
   reasoningDelta?: string
+  thinkingFinished?: boolean
+  thinkingDurationMs?: number
+  toolCalling?: boolean
+  outputTokenDelta?: number
+  usageOutputTokens?: number
   sideChatDelta?: { content?: string; reasoning?: string }
   pendingApproval?: ToolCallItem
   terminalLine?: { commandId: string; text: string; stream: 'stdout' | 'stderr' }

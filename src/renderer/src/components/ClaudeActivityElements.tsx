@@ -12,17 +12,50 @@ import { isLikelyInlineMathDollar } from '../utils/latexMathUtils'
 const CLAUDE_ACTIVITY_GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 
 /**
- * Signature rotating verbs inspired by Claude Code's `spinnerVerbs`
+ * Phase-specific rotating verbs modeled after Claude Code v2.1.88 `spinnerVerbs`
  */
-const CLAUDE_SPINNER_VERBS = [
+const CLAUDE_THINKING_VERBS = [
   'Thinking…',
   'Pondering…',
-  'Analyzing…',
-  'Synthesizing…',
-  'Ruminating…',
-  'Architecting…',
-  'Clauding…'
+  'Cogitating…',
+  'Deliberating…',
+  'Ruminating…'
 ]
+
+const CLAUDE_RESPONDING_VERBS = [
+  'Composing…',
+  'Clauding…',
+  'Synthesizing…',
+  'Crafting…',
+  'Generating…',
+  'Unfurling…'
+]
+
+function getClaudeToolSpinnerVerbs(toolName?: string): string[] {
+  const primary = (() => {
+    switch (toolName) {
+      case 'read_file':
+      case 'inspect_code_symbols':
+        return 'Reading…'
+      case 'search_files':
+        return 'Searching…'
+      case 'edit_file':
+        return 'Editing…'
+      case 'write_file':
+        return 'Writing…'
+      case 'run_bash':
+        return 'Running…'
+      case 'delegate_to_swarm':
+        return 'Orchestrating…'
+      default:
+        return 'Working…'
+    }
+  })()
+  const rest = ['Working…', 'Processing…', 'Executing…'].filter((v) => v !== primary)
+  return [primary, ...rest]
+}
+
+export type ClaudeLiveStatusPhase = 'thinking' | 'tool' | 'responding'
 
 export const LAYER_BADGE_STYLE: Record<MemoryLayer, string> = {
   L1: 'bg-[#D97757]/15 text-[#C45533] border-[#D97757]/30',
@@ -119,7 +152,7 @@ export const ClaudeAsteriskGlyph: React.FC<{ active?: boolean; className?: strin
     }
     const timer = setInterval(() => {
       setFrameIdx((prev) => (prev + 1) % CLAUDE_ACTIVITY_GLYPHS.length)
-    }, 115)
+    }, 120)
     return () => clearInterval(timer)
   }, [active])
 
@@ -265,24 +298,50 @@ export const ClaudeMemoryCrystallizedBadge: React.FC<{
   )
 }
 
+export const ClaudeStreamingCaret: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <span className={`claude-streaming-caret ${className}`} aria-hidden="true" />
+)
+
 /**
- * Claude Code's active bottom status spinner line:
- * `✻ Thinking… (esc to interrupt · 4s · ↓ 1.2k tokens)`
+ * Claude Code's single active status spinner line:
+ * - While thinking:  `✻ Thinking… (esc to interrupt · 4s · ↓ 120 tokens)`
+ * - While tool runs: `✻ Reading… (esc to interrupt · 5s · ↓ 240 tokens)`
+ * - While answering: `✻ Composing… (esc to interrupt · 6s · ↓ 580 tokens)`
  */
 export const ClaudeLiveStatusRow: React.FC<{
   startedAt: number | null
   tokenCount: number
+  phase?: ClaudeLiveStatusPhase
+  activeToolName?: string
+  compact?: boolean
   onInterrupt?: () => void
-}> = ({ startedAt, tokenCount, onInterrupt }) => {
+}> = ({
+  startedAt,
+  tokenCount,
+  phase = 'thinking',
+  activeToolName,
+  compact = false,
+  onInterrupt
+}) => {
   const [verbIdx, setVerbIdx] = useState(0)
   const [elapsedSec, setElapsedSec] = useState(0)
 
+  const verbs = useMemo(() => {
+    if (phase === 'tool') return getClaudeToolSpinnerVerbs(activeToolName)
+    if (phase === 'responding') return CLAUDE_RESPONDING_VERBS
+    return CLAUDE_THINKING_VERBS
+  }, [phase, activeToolName])
+
+  useEffect(() => {
+    setVerbIdx(0)
+  }, [phase, activeToolName])
+
   useEffect(() => {
     const verbTimer = setInterval(() => {
-      setVerbIdx((prev) => (prev + 1) % CLAUDE_SPINNER_VERBS.length)
+      setVerbIdx((prev) => (prev + 1) % verbs.length)
     }, 3200)
     return () => clearInterval(verbTimer)
-  }, [])
+  }, [verbs])
 
   useEffect(() => {
     const base = startedAt || Date.now()
@@ -298,10 +357,14 @@ export const ClaudeLiveStatusRow: React.FC<{
     tokenCount >= 1000 ? `${(tokenCount / 1000).toFixed(1)}k` : String(tokenCount)
 
   return (
-    <div className="flex items-center gap-2 py-1.5 text-[13px] font-mono select-none animate-apple-view">
+    <div
+      className={`flex items-center gap-2 font-mono select-none animate-apple-view ${
+        compact ? 'py-0.5 text-[12px]' : 'py-1.5 text-[13px]'
+      }`}
+    >
       <ClaudeAsteriskGlyph active />
-      <span className="claude-shimmer-text font-medium">{CLAUDE_SPINNER_VERBS[verbIdx]}</span>
-      <span className="text-[#86868b] text-[12px]">
+      <span className="claude-shimmer-text font-medium">{verbs[verbIdx % verbs.length]}</span>
+      <span className={`text-[#86868b] ${compact ? 'text-[11px]' : 'text-[12px]'}`}>
         (
         {onInterrupt ? (
           <button
@@ -323,17 +386,26 @@ export const ClaudeLiveStatusRow: React.FC<{
 }
 
 /**
- * Thinking Process Block:
- * - While actively thinking (`isStreaming === true`): Preserves exact Claude Code live form (`✻ Thinking… (Xs)` + open live trace).
- * - Once thinking finishes (`isStreaming === false`): Automatically collapses into a quiet OpenAI Codex-style disclosure row (`已思考 Xs ›`) so primary output takes center stage; expanding shows the exact unchanged reasoning trace.
+ * Thinking Process Block (Claude Code `∴ Thinking` trace + quiet post-thinking disclosure):
+ * - While actively thinking (`isStreaming === true`): Renders ONLY the quiet collapsible reasoning trace (`∴ Thinking`),
+ *   leaving the single `✻ Thinking…` spinner animation exclusively to `ClaudeLiveStatusRow` (no duplicate thinking rows!).
+ * - Once thinking finishes (`isStreaming === false`): Immediately stops any timers and collapses into `已思考 Xs ›`.
  */
 export const ClaudeThinkingBlock: React.FC<{
   reasoningContent: string
   isStreaming?: boolean
   durationMs?: number
   interrupted?: boolean
+  showInlineLiveStatus?: boolean
   onInterrupt?: () => void
-}> = ({ reasoningContent, isStreaming = false, durationMs, interrupted = false, onInterrupt }) => {
+}> = ({
+  reasoningContent,
+  isStreaming = false,
+  durationMs,
+  interrupted = false,
+  showInlineLiveStatus = false,
+  onInterrupt
+}) => {
   const effectivelyStreaming = Boolean(isStreaming && !interrupted)
   const [isOpen, setIsOpen] = useState<boolean>(effectivelyStreaming)
   const [liveMs, setLiveMs] = useState(0)
@@ -342,19 +414,19 @@ export const ClaudeThinkingBlock: React.FC<{
     if (effectivelyStreaming) {
       setIsOpen(true)
     } else {
-      // Automatically collapse in Codex style as soon as thinking completes and answer begins
+      // Automatically collapse as soon as thinking completes and answer/tools begin
       setIsOpen(false)
     }
   }, [effectivelyStreaming])
 
   useEffect(() => {
-    if (!effectivelyStreaming) return
+    if (!effectivelyStreaming || !showInlineLiveStatus) return
     const start = Date.now()
     const timer = setInterval(() => {
       setLiveMs(Date.now() - start)
     }, 100)
     return () => clearInterval(timer)
-  }, [effectivelyStreaming])
+  }, [effectivelyStreaming, showInlineLiveStatus])
 
   // Solidify duration: once durationMs is provided or interrupted, it is frozen and never ticks again
   const secondsText = durationMs
@@ -363,47 +435,70 @@ export const ClaudeThinkingBlock: React.FC<{
       ? `${(liveMs / 1000).toFixed(1)}s`
       : '1.2s'
 
+  if (!reasoningContent.trim() && (!effectivelyStreaming || !showInlineLiveStatus)) {
+    return null
+  }
+
   return (
-    <div className={effectivelyStreaming ? 'my-1.5' : 'my-0.5'}>
+    <div className={effectivelyStreaming ? 'my-1' : 'my-0.5'}>
       {effectivelyStreaming ? (
-        <div className="inline-flex items-center gap-2 py-0.5 select-none flex-wrap">
+        showInlineLiveStatus ? (
+          <div className="inline-flex items-center gap-2 py-0.5 select-none flex-wrap">
+            <button
+              type="button"
+              onClick={() => setIsOpen((v) => !v)}
+              className="group inline-flex items-center gap-2 text-[13px] text-[#6e6e73] hover:text-[#1d1d1f] transition-colors"
+            >
+              <ClaudeAsteriskGlyph active />
+              <span className="claude-shimmer-text font-mono font-medium">
+                Thinking… ({secondsText})
+              </span>
+              <ChevronRight
+                className={`w-3.5 h-3.5 text-[#86868b] transition-transform duration-200 ${
+                  isOpen ? 'rotate-90' : ''
+                }`}
+              />
+            </button>
+            {onInterrupt && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onInterrupt()
+                }}
+                className="apple-press px-2 py-0.5 rounded-md bg-[#FF3B30]/10 hover:bg-[#FF3B30]/18 text-[#C41E16] text-[11px] font-medium transition-colors"
+                title="中断当前思考与生成 (快捷键 Esc)"
+              >
+                停止思考
+              </button>
+            )}
+          </div>
+        ) : (
+          /* Quiet CC-style live reasoning trace toggle (single spinner lives in ClaudeLiveStatusRow) */
           <button
             type="button"
             onClick={() => setIsOpen((v) => !v)}
-            className="group inline-flex items-center gap-2 text-[13px] text-[#6e6e73] hover:text-[#1d1d1f] transition-colors"
+            className="group inline-flex items-center gap-1.5 px-2 py-0.5 -ml-1 rounded-lg hover:bg-black/[0.04] text-[12px] text-[#86868b] hover:text-[#1d1d1f] transition-colors select-none"
           >
-            <ClaudeAsteriskGlyph active />
-            <span className="claude-shimmer-text font-mono font-medium">
-              Thinking… ({secondsText})
-            </span>
+            <span className="font-mono text-[#8e8e93]">∴ Thinking</span>
             <ChevronRight
-              className={`w-3.5 h-3.5 text-[#86868b] transition-transform duration-200 ${
+              className={`w-3.5 h-3.5 text-[#aeaeb2] group-hover:text-[#1d1d1f] transition-transform duration-200 ${
                 isOpen ? 'rotate-90' : ''
               }`}
             />
           </button>
-          {onInterrupt && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onInterrupt()
-              }}
-              className="apple-press px-2 py-0.5 rounded-md bg-[#FF3B30]/10 hover:bg-[#FF3B30]/18 text-[#C41E16] text-[11px] font-medium transition-colors"
-              title="中断当前思考与生成 (快捷键 Esc)"
-            >
-              停止思考
-            </button>
-          )}
-        </div>
+        )
       ) : (
-        /* OpenAI Codex-Style Quiet Collapsed Post-Thinking Disclosure */
+        /* Quiet Collapsed Post-Thinking Disclosure */
         <button
           type="button"
           onClick={() => setIsOpen((v) => !v)}
           className="group inline-flex items-center gap-1.5 px-2 py-0.5 -ml-1 rounded-lg hover:bg-black/[0.04] text-[12px] text-[#86868b] hover:text-[#1d1d1f] transition-colors select-none"
         >
-          <span className="font-mono">已思考 {secondsText}{interrupted ? '（已中断）' : ''}</span>
+          <span className="font-mono">
+            已思考 {secondsText}
+            {interrupted ? '（已中断）' : ''}
+          </span>
           <ChevronRight
             className={`w-3.5 h-3.5 text-[#aeaeb2] group-hover:text-[#1d1d1f] transition-transform duration-200 ${
               isOpen ? 'rotate-90' : ''
@@ -413,10 +508,10 @@ export const ClaudeThinkingBlock: React.FC<{
       )}
 
       {isOpen && reasoningContent && (
-        <div className="animate-apple-view ml-2 mt-1.5 pl-4 border-l-2 border-[#D97757]/30 text-[12.5px] text-[#6e6e73] italic whitespace-pre-wrap leading-[1.65] font-sans">
+        <div className="animate-apple-view ml-2 mt-1 pl-3.5 border-l-2 border-black/[0.1] text-[12.5px] text-[#6e6e73] italic whitespace-pre-wrap leading-[1.65] font-sans">
           {reasoningContent}
           {effectivelyStreaming && (
-            <span className="inline-block w-1.5 h-3.5 ml-1 align-middle bg-[#D97757]/70 animate-pulse rounded-sm" />
+            <span className="inline-block w-1.5 h-3.5 ml-1 align-middle bg-[#8e8e93]/60 animate-pulse rounded-sm" />
           )}
         </div>
       )}
@@ -604,7 +699,11 @@ export const AsciiBoxTableRenderer: React.FC<{ rows: AsciiBoxRow[] }> = ({ rows 
 /**
  * Copyable Fenced Code Block styled after Claude Code CLI Terminal
  */
-const TerminalCodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
+const TerminalCodeBlock: React.FC<{
+  language: string
+  code: string
+  isStreaming?: boolean
+}> = ({ language, code, isStreaming = false }) => {
   const [copied, setCopied] = useState(false)
 
   const parsedBoxTable = useMemo(() => {
@@ -647,6 +746,7 @@ const TerminalCodeBlock: React.FC<{ language: string; code: string }> = ({ langu
       ) : (
         <pre className="claude-terminal-code p-4 overflow-x-auto text-[#1d1d1f] text-[13px] leading-[1.65] whitespace-pre">
           {code}
+          {isStreaming && <ClaudeStreamingCaret />}
         </pre>
       )}
     </div>
@@ -1180,7 +1280,10 @@ function renderInlineTerminalText(text: string, contextFullText?: string): React
  * Uses Apple editorial + Claude Code monospace hybrid typography with generous breathing space,
  * prominent headings, elegant structured tables, lists, and directory tree diagrams.
  */
-export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content }) => {
+export const ClaudeTerminalOutput: React.FC<{
+  content: string
+  isStreaming?: boolean
+}> = ({ content, isStreaming = false }) => {
   if (!content) return null
 
   const sanitizedContent = maskSensitiveSecrets(content)
@@ -1224,29 +1327,38 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
     }
   }
 
-  const renderProseLines = (text: string, segIdx: number): React.ReactNode[] => {
+  const renderProseLines = (
+    text: string,
+    segIdx: number,
+    attachCaret: boolean
+  ): React.ReactNode[] => {
     const pLines = text.split('\n')
     const blocks: React.ReactNode[] = []
     let i = 0
+    let caretAttached = false
+
+    const isTrailingAfter = (nextIdx: number): boolean =>
+      attachCaret && !caretAttached && pLines.slice(nextIdx).every((l) => !l.trim())
 
     while (i < pLines.length) {
+      const blockStartIdx = i
       const line = pLines[i]
       const trimmed = line.trim()
 
       if (!trimmed) {
         // Preserve intentional empty lines as distinct paragraph / section breathing room
-        let blankCount = 0
         while (i < pLines.length && !pLines[i].trim()) {
-          blankCount++
           i++
         }
-        blocks.push(<div key={`blank_${segIdx}_${i}`} className="h-3" />)
+        blocks.push(<div key={`blank_${segIdx}_${blockStartIdx}`} className="h-3" />)
         continue
       }
 
       // Horizontal Rule
       if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-        blocks.push(<hr key={`hr_${segIdx}_${i}`} className="my-4 border-t border-black/[0.08]" />)
+        blocks.push(
+          <hr key={`hr_${segIdx}_${blockStartIdx}`} className="my-4 border-t border-black/[0.08]" />
+        )
         i++
         continue
       }
@@ -1262,18 +1374,21 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
           const trailing = trimmed.slice(sameLineCloseIdx + closeDelim.length).trim()
           blocks.push(
             <LatexMathFormula
-              key={`math_${segIdx}_${i}`}
+              key={`math_${segIdx}_${blockStartIdx}`}
               latex={expr}
               displayMode={true}
             />
           )
           if (trailing) {
+            const showCaret = isTrailingAfter(i + 1)
+            if (showCaret) caretAttached = true
             blocks.push(
               <p
-                key={`math_trail_${segIdx}_${i}`}
+                key={`math_trail_${segIdx}_${blockStartIdx}`}
                 className="my-2 text-[14px] leading-[1.78] text-[#2c2c2e] whitespace-pre-wrap font-sans"
               >
                 {renderInlineTerminalText(trailing, content)}
+                {showCaret && <ClaudeStreamingCaret />}
               </p>
             )
           }
@@ -1309,25 +1424,32 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
           if (mathLines.length > 40) break
         }
 
-        if (foundClose || (!hasHeadingBreak && mathLines.length > 0 && mathLines.length <= 25 && j === pLines.length)) {
+        if (
+          foundClose ||
+          (!hasHeadingBreak && mathLines.length > 0 && mathLines.length <= 25 && j === pLines.length)
+        ) {
           blocks.push(
             <LatexMathFormula
-              key={`math_${segIdx}_${i}`}
+              key={`math_${segIdx}_${blockStartIdx}`}
               latex={mathLines.join('\n')}
               displayMode={true}
             />
           )
+          const nextIndex = foundClose ? j + 1 : j
           if (trailingAfterClose) {
+            const showCaret = isTrailingAfter(nextIndex)
+            if (showCaret) caretAttached = true
             blocks.push(
               <p
-                key={`math_trail_${segIdx}_${j}`}
+                key={`math_trail_${segIdx}_${blockStartIdx}`}
                 className="my-2 text-[14px] leading-[1.78] text-[#2c2c2e] whitespace-pre-wrap font-sans"
               >
                 {renderInlineTerminalText(trailingAfterClose, content)}
+                {showCaret && <ClaudeStreamingCaret />}
               </p>
             )
           }
-          i = foundClose ? j + 1 : j
+          i = nextIndex
           continue
         }
       }
@@ -1354,7 +1476,7 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
         }
         blocks.push(
           <div
-            key={`tbl_${segIdx}_${i}`}
+            key={`tbl_${segIdx}_${blockStartIdx}`}
             className="my-4.5 rounded-2xl border border-black/[0.08] bg-white shadow-[0_1px_4px_rgba(0,0,0,0.03)] overflow-hidden"
           >
             <div className="overflow-x-auto">
@@ -1400,10 +1522,15 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
             : level === 2
               ? 'text-[15.5px] sm:text-[16px] font-bold text-[#111111] mt-5 mb-2.5 flex items-center gap-2 tracking-tight'
               : 'text-[14.5px] font-bold text-[#1d1d1f] mt-4 mb-2'
+        const showCaret = isTrailingAfter(i + 1)
+        if (showCaret) caretAttached = true
         blocks.push(
-          <div key={`h_${segIdx}_${i}`} className={cls}>
+          <div key={`h_${segIdx}_${blockStartIdx}`} className={cls}>
             {level === 2 && <span className="text-[#0071e3] text-[12px] select-none">▍</span>}
-            <span>{renderInlineTerminalText(headingText, content)}</span>
+            <span>
+              {renderInlineTerminalText(headingText, content)}
+              {showCaret && <ClaudeStreamingCaret />}
+            </span>
           </div>
         )
         i++
@@ -1417,13 +1544,18 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
           quoteLines.push(pLines[i].trim().replace(/^>\s?/, ''))
           i++
         }
+        const showCaret = isTrailingAfter(i)
+        if (showCaret) caretAttached = true
         blocks.push(
           <blockquote
-            key={`q_${segIdx}_${i}`}
+            key={`q_${segIdx}_${blockStartIdx}`}
             className="my-3.5 pl-4 py-2 border-l-3 border-[#D97757] bg-[#F5F5F7]/70 rounded-r-xl text-[#3a3a3c] text-[13.5px] space-y-1 font-sans"
           >
             {quoteLines.map((ql, qIdx) => (
-              <div key={qIdx}>{renderInlineTerminalText(ql, content)}</div>
+              <div key={qIdx}>
+                {renderInlineTerminalText(ql, content)}
+                {showCaret && qIdx === quoteLines.length - 1 && <ClaudeStreamingCaret />}
+              </div>
             ))}
           </blockquote>
         )
@@ -1450,19 +1582,22 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
         if (boxData) {
           blocks.push(
             <div
-              key={`tree_${segIdx}_${i}`}
+              key={`tree_${segIdx}_${blockStartIdx}`}
               className="claude-terminal-code my-3.5 p-4 rounded-2xl bg-[#F6F6F8] border border-black/[0.08] overflow-x-auto"
             >
               <AsciiBoxTableRenderer rows={boxData} />
             </div>
           )
         } else {
+          const showCaret = isTrailingAfter(i)
+          if (showCaret) caretAttached = true
           blocks.push(
             <pre
-              key={`tree_${segIdx}_${i}`}
+              key={`tree_${segIdx}_${blockStartIdx}`}
               className="claude-terminal-code my-3.5 p-4 rounded-2xl bg-[#F6F6F8] border border-black/[0.08] overflow-x-auto text-[#1d1d1f] whitespace-pre leading-[1.58] text-[12.5px]"
             >
               {fullTreeText}
+              {showCaret && <ClaudeStreamingCaret />}
             </pre>
           )
         }
@@ -1483,8 +1618,13 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
           })
           i++
         }
+        const showCaret = isTrailingAfter(i)
+        if (showCaret) caretAttached = true
         blocks.push(
-          <div key={`ul_${segIdx}_${i}`} className="my-2.5 space-y-1.5 text-[14px] leading-[1.72] text-[#2c2c2e] font-sans">
+          <div
+            key={`ul_${segIdx}_${blockStartIdx}`}
+            className="my-2.5 space-y-1.5 text-[14px] leading-[1.72] text-[#2c2c2e] font-sans"
+          >
             {items.map((it, idx) => (
               <div
                 key={idx}
@@ -1494,7 +1634,10 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
                 <span className="text-[#86868b] font-mono select-none shrink-0 min-w-[16px] text-[13px] mt-0.5">
                   {it.marker}
                 </span>
-                <div className="flex-1 min-w-0">{renderInlineTerminalText(it.body, content)}</div>
+                <div className="flex-1 min-w-0">
+                  {renderInlineTerminalText(it.body, content)}
+                  {showCaret && idx === items.length - 1 && <ClaudeStreamingCaret />}
+                </div>
               </div>
             ))}
           </div>
@@ -1529,15 +1672,29 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
         paraLines.push(next)
         i++
       }
+      const showCaret = isTrailingAfter(i)
+      if (showCaret) caretAttached = true
       blocks.push(
-        <p key={`p_${segIdx}_${i}`} className="my-2.5 text-[14px] leading-[1.78] text-[#2c2c2e] whitespace-pre-wrap font-sans">
+        <p
+          key={`p_${segIdx}_${blockStartIdx}`}
+          className="my-2.5 text-[14px] leading-[1.78] text-[#2c2c2e] whitespace-pre-wrap font-sans"
+        >
           {paraLines.map((pl, pIdx) => (
             <React.Fragment key={pIdx}>
               {pIdx > 0 && '\n'}
               {renderInlineTerminalText(pl, content)}
             </React.Fragment>
           ))}
+          {showCaret && <ClaudeStreamingCaret />}
         </p>
+      )
+    }
+
+    if (attachCaret && !caretAttached) {
+      blocks.push(
+        <div key={`caret_tail_${segIdx}`} className="mt-1">
+          <ClaudeStreamingCaret />
+        </div>
       )
     }
 
@@ -1548,10 +1705,15 @@ export const ClaudeTerminalOutput: React.FC<{ content: string }> = ({ content })
     <div className="claude-terminal-output flex-1 min-w-0">
       {segments.map((seg, idx) =>
         seg.type === 'code' ? (
-          <TerminalCodeBlock key={`code_${idx}`} language={seg.lang} code={seg.code} />
+          <TerminalCodeBlock
+            key={`code_${idx}`}
+            language={seg.lang}
+            code={seg.code}
+            isStreaming={Boolean(isStreaming && idx === segments.length - 1)}
+          />
         ) : (
           <React.Fragment key={`prose_${idx}`}>
-            {renderProseLines(seg.text, idx)}
+            {renderProseLines(seg.text, idx, Boolean(isStreaming && idx === segments.length - 1))}
           </React.Fragment>
         )
       )}

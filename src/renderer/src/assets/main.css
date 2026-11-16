@@ -269,16 +269,16 @@
 .claude-shimmer-text {
   background: linear-gradient(
     90deg,
-    #c96442 0%,
-    #c96442 35%,
-    #f59f7c 50%,
-    #c96442 65%,
-    #c96442 100%
+    #c25d3b 0%,
+    #c25d3b 36%,
+    #ffb494 50%,
+    #c25d3b 64%,
+    #c25d3b 100%
   );
   background-size: 220% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: claudeTextShimmer 2.1s linear infinite;
+  animation: claudeTextShimmer 1.75s linear infinite;
 }
 
 .claude-glyph-pulse {
@@ -287,6 +287,44 @@
   justify-content: center;
   color: #d97757;
   animation: claudeGlyphPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes claudeCaretPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 0.28;
+    transform: scaleY(0.86);
+  }
+}
+
+.claude-streaming-caret {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background-color: #d97757;
+  animation: claudeCaretPulse 0.95s ease-in-out infinite;
+}
+
+@keyframes claudeBulletPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.42;
+    transform: scale(0.84);
+  }
+}
+
+.claude-bullet-pulse {
+  color: #d97757;
+  animation: claudeBulletPulse 1.15s ease-in-out infinite;
 }
 
 /* View & Sheet Entrance Choreography */
@@ -332,12 +370,28 @@
   }
 }
 
+@keyframes appleMenuEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .animate-apple-view {
   animation: appleViewEnter 360ms var(--apple-ease) both;
 }
 
 .animate-apple-modal {
   animation: appleModalEnter 400ms var(--spring-bounce) both;
+}
+
+.animate-apple-menu {
+  animation: appleMenuEnter 140ms var(--apple-out) both;
+  transform-origin: top left;
 }
 
 .animate-apple-backdrop {

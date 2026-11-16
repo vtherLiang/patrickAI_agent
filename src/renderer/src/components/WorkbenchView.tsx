@@ -41,6 +41,7 @@ import { CodexSideChatDrawer } from './CodexSideChatDrawer'
 import { AttachmentContextMenu } from './AttachmentContextMenu'
 import { isKnowledgeBaseCompatibleAttachment } from '../utils/attachmentUtils'
 import {
+  ClaudeLiveStatusPhase,
   ClaudeLiveStatusRow,
   ClaudeMemoryCrystallizedBadge,
   ClaudeMemoryRecallBlock,
@@ -73,12 +74,22 @@ interface TranscriptTurnGroup {
   assistantTurn?: AssistantTurnData
 }
 
-function buildTranscriptTurnGroups(allMessages: ChatMessage[]): TranscriptTurnGroup[] {
+function buildTranscriptTurnGroups(
+  allMessages: ChatMessage[],
+  isBusy: boolean
+): TranscriptTurnGroup[] {
   const visible = allMessages.filter((m) => m.role !== 'tool')
-  const groups: TranscriptTurnGroup[] = []
+  const rawGroups: Array<{
+    id: string
+    userTurn?: { id: string; message: ChatMessage }
+    assistantMsgs: ChatMessage[]
+  }> = []
   let idx = 0
 
-  const processAssistantMessages = (assistantMsgs: ChatMessage[]): AssistantTurnData => {
+  const processAssistantMessages = (
+    assistantMsgs: ChatMessage[],
+    isTurnBusy: boolean
+  ): AssistantTurnData => {
     const recalledMap = new Map<string, RecalledMemoryItem>()
     const crystallizedList: NonNullable<ChatMessage['crystallizedMemories']> = []
     let isCompactedSummary = false
@@ -100,13 +111,26 @@ function buildTranscriptTurnGroups(allMessages: ChatMessage[]): TranscriptTurnGr
         crystallizedList.push(...m.crystallizedMemories)
       }
 
-      // 1. Thinking step
-      if (m.reasoningContent || (m.isThinkingStreaming && !m.interrupted)) {
+      const contentTrimmed = (m.content || '').trim()
+      const hasContent = Boolean(m.content && m.content.length > 0)
+      const hasToolCalls = Boolean(m.toolCalls && m.toolCalls.length > 0)
+      const hasReasoning = Boolean(m.reasoningContent && m.reasoningContent.trim().length > 0)
+
+      // 1. Thinking step (only emit when reasoning trace exists; active ONLY while busy, last message, and before content/tools)
+      if (hasReasoning) {
+        const isThinkingActive = Boolean(
+          isTurnBusy &&
+            isLast &&
+            m.isThinkingStreaming &&
+            !m.interrupted &&
+            !hasContent &&
+            !hasToolCalls
+        )
         allActivitySteps.push({
           kind: 'thinking',
           id: `th_${m.id}`,
           reasoningContent: m.reasoningContent || '',
-          isStreaming: Boolean(m.isThinkingStreaming && !m.interrupted),
+          isStreaming: isThinkingActive,
           durationMs: m.thinkingDurationMs,
           interrupted: Boolean(m.interrupted)
         })
@@ -117,9 +141,6 @@ function buildTranscriptTurnGroups(allMessages: ChatMessage[]): TranscriptTurnGr
       // Any text generated during intermediate tool calls (like "我先尝试抓取...", "必应返回动态外壳...")
       // belongs to the intermediate execution logs and MUST be folded inside the activity block!
       // Only the final message's text (after tools are done) is the user-facing response prose.
-      const contentTrimmed = (m.content || '').trim()
-      const hasToolCalls = Boolean(m.toolCalls && m.toolCalls.length > 0)
-
       if (contentTrimmed) {
         // If it's an intermediate step followed by more turns, or purely short tool narration, fold into activity log.
         // But if it's the last message or contains substantial analysis content (> 120 chars or multiple lines),
@@ -150,6 +171,25 @@ function buildTranscriptTurnGroups(allMessages: ChatMessage[]): TranscriptTurnGr
             id: `tc_${tc.id}`,
             toolCall: tc
           })
+        }
+      }
+    }
+
+    if (!finalProse.trim()) {
+      for (let sIdx = allActivitySteps.length - 1; sIdx >= 0; sIdx--) {
+        const step = allActivitySteps[sIdx]
+        if (step.kind === 'note') {
+          const text = step.content.trim()
+          if (
+            text.length > 120 ||
+            text.includes('\n\n') ||
+            text.startsWith('#') ||
+            text.includes('```')
+          ) {
+            finalProse = step.content
+            allActivitySteps.splice(sIdx, 1)
+          }
+          break
         }
       }
     }
@@ -193,13 +233,13 @@ function buildTranscriptTurnGroups(allMessages: ChatMessage[]): TranscriptTurnGr
         idx++
       }
 
-      groups.push({
+      rawGroups.push({
         id: `group_${userMsg.id}`,
         userTurn: {
           id: userMsg.id,
           message: userMsg
         },
-        assistantTurn: assistantMsgs.length > 0 ? processAssistantMessages(assistantMsgs) : undefined
+        assistantMsgs
       })
     } else {
       const assistantMsgs: ChatMessage[] = []
@@ -208,15 +248,25 @@ function buildTranscriptTurnGroups(allMessages: ChatMessage[]): TranscriptTurnGr
         idx++
       }
       if (assistantMsgs.length > 0) {
-        groups.push({
+        rawGroups.push({
           id: `group_ast_${assistantMsgs[0].id}`,
-          assistantTurn: processAssistantMessages(assistantMsgs)
+          assistantMsgs
         })
       }
     }
   }
 
-  return groups
+  return rawGroups.map((rg, groupIdx) => {
+    const isTurnBusy = Boolean(isBusy && groupIdx === rawGroups.length - 1)
+    return {
+      id: rg.id,
+      userTurn: rg.userTurn,
+      assistantTurn:
+        rg.assistantMsgs.length > 0
+          ? processAssistantMessages(rg.assistantMsgs, isTurnBusy)
+          : undefined
+    }
+  })
 }
 
 interface StickyUserPromptCardProps {
@@ -528,6 +578,7 @@ export const WorkbenchView: React.FC = () => {
     setDraftComposerAttachments,
     isBusy,
     busyStartedAt,
+    liveOutputTokens,
     tokenStats,
     pendingApproval,
     terminalLogs,
@@ -558,6 +609,67 @@ export const WorkbenchView: React.FC = () => {
     threadDrafts,
     setThreadDraft
   } = useAppStore()
+
+  const activeTurnSummary = useMemo(() => {
+    if (!isBusy) {
+      return {
+        phase: 'thinking' as ClaudeLiveStatusPhase,
+        activeToolName: undefined as string | undefined,
+        turnTokens: 0
+      }
+    }
+    let lastUserIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUserIdx = i
+        break
+      }
+    }
+    const turnMsgs = messages.slice(lastUserIdx + 1).filter((m) => m.role === 'assistant')
+    const lastAst = turnMsgs[turnMsgs.length - 1]
+    let runningToolName: string | undefined
+    for (const msg of turnMsgs) {
+      const activeTc = msg.toolCalls?.find(
+        (tc) => tc.status === 'running' || tc.status === 'pending_approval'
+      )
+      if (activeTc) {
+        runningToolName = activeTc.name
+        break
+      }
+    }
+
+    let phase: ClaudeLiveStatusPhase = 'thinking'
+    if (runningToolName) {
+      phase = 'tool'
+    } else if (lastAst) {
+      if (lastAst.content && lastAst.content.length > 0) {
+        phase = 'responding'
+      } else if (!lastAst.isThinkingStreaming) {
+        phase = lastAst.toolCalls && lastAst.toolCalls.length > 0 ? 'tool' : 'responding'
+      } else {
+        phase = 'thinking'
+      }
+    }
+
+    let charCount = 0
+    for (const msg of turnMsgs) {
+      charCount += (msg.reasoningContent?.length || 0) + (msg.content?.length || 0)
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          charCount += tc.argumentsJson?.length || 0
+        }
+      }
+    }
+    const msgEstimatedTokens = charCount > 0 ? Math.max(1, Math.ceil(charCount * 0.35)) : 0
+    const turnTokens = Math.max(liveOutputTokens, msgEstimatedTokens)
+
+    return { phase, activeToolName: runningToolName, turnTokens }
+  }, [isBusy, messages, liveOutputTokens])
+
+  const transcriptGroups = useMemo(
+    () => buildTranscriptTurnGroups(messages, isBusy),
+    [messages, isBusy]
+  )
 
   const [attachmentContextMenu, setAttachmentContextMenu] = useState<{
     x: number
@@ -1349,9 +1461,10 @@ export const WorkbenchView: React.FC = () => {
               ) : (
                 /* Authentic Claude Code CLI Transcript Layout with Gemini Antigravity Sticky Questions */
                 <div className="space-y-6">
-                  {buildTranscriptTurnGroups(messages).map((group) => {
+                  {transcriptGroups.map((group, groupIdx) => {
                     const userTurn = group.userTurn
                     const ast = group.assistantTurn
+                    const isLastGroup = groupIdx === transcriptGroups.length - 1
 
                     return (
                       <div key={group.id} className="relative turn-group space-y-3 pb-2">
@@ -1386,53 +1499,137 @@ export const WorkbenchView: React.FC = () => {
                             )}
 
                             {/* 1 & 2. Chronological Folded Activity Summaries (`Thinking` + `Bash` + `Write` + `Update` + `Read` + `Search`) & `●` Terminal Prose */}
-                            {ast.segments.map((seg) =>
-                              seg.kind === 'activity' ? (
-                                <ClaudeTurnActivityGroup
-                                  key={seg.id}
-                                  steps={seg.steps}
-                                  onInterrupt={abortGeneration}
-                                  defaultExpanded={false}
-                                />
-                              ) : (
+                            {ast.segments.map((seg, segIdx) => {
+                              if (seg.kind === 'activity') {
+                                return (
+                                  <ClaudeTurnActivityGroup
+                                    key={seg.id}
+                                    steps={seg.steps}
+                                    onInterrupt={abortGeneration}
+                                    defaultExpanded={false}
+                                  />
+                                )
+                              }
+                              const isProseStreaming = Boolean(
+                                isBusy &&
+                                  !pendingApproval &&
+                                  isLastGroup &&
+                                  segIdx === ast.segments.length - 1
+                              )
+                              return (
                                 <div key={seg.id} className="flex items-start gap-2 pt-0.5">
-                                  <span className="w-4 text-center font-mono text-[11px] text-[#1d1d1f] select-none mt-1.5 shrink-0">
+                                  <span
+                                    className={`w-4 text-center font-mono text-[11px] select-none mt-1.5 shrink-0 ${
+                                      isProseStreaming ? 'claude-bullet-pulse' : 'text-[#1d1d1f]'
+                                    }`}
+                                  >
                                     ●
                                   </span>
-                                  <ClaudeTerminalOutput content={seg.content} />
+                                  <ClaudeTerminalOutput
+                                    content={seg.content}
+                                    isStreaming={isProseStreaming}
+                                  />
                                 </div>
                               )
-                            )}
+                            })}
 
-                            {ast.segments.every((s) => s.kind !== 'prose') && (!isBusy || ast.interrupted) && (
-                              <div className="flex flex-col gap-1.5 pt-1 pl-1 text-[13px] text-[#6e6e73] font-sans">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-4 text-center font-mono text-[11px] text-[#1d1d1f] select-none shrink-0">
-                                    ●
-                                  </span>
-                                  <span>
-                                    {ast.interrupted
-                                      ? '已停止思考（可展开上方步骤查看已生成的思考轨迹）。'
-                                      : '已完成对文件的检索与解析（可展开上方步骤查看执行详情）。'}
-                                  </span>
-                                </div>
-                                {!ast.interrupted && (
-                                  <div className="pl-6">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
+                            {ast.segments.every((s) => s.kind !== 'prose') &&
+                              (!isBusy || ast.interrupted) &&
+                              (() => {
+                                const activitySteps = ast.segments
+                                  .filter(
+                                    (s): s is Extract<AssistantTurnSegment, { kind: 'activity' }> =>
+                                      s.kind === 'activity'
+                                  )
+                                  .flatMap((s) => s.steps)
+                                const hasThinkingStep = activitySteps.some(
+                                  (st) =>
+                                    st.kind === 'thinking' && st.reasoningContent.trim().length > 0
+                                )
+                                const hasToolStep = activitySteps.some((st) => st.kind === 'tool')
+                                const userPromptText = (userTurn?.message?.content || '').trim()
+
+                                let statusText = ''
+                                let actionLabel = ''
+                                let onAction: (() => void) | null = null
+
+                                if (ast.interrupted) {
+                                  if (hasThinkingStep && hasToolStep) {
+                                    statusText =
+                                      '已停止思考与工具执行（可展开上方步骤查看已生成的轨迹）。'
+                                  } else if (hasThinkingStep) {
+                                    statusText =
+                                      '已停止思考（可展开上方「已思考」查看已生成的思考轨迹）。'
+                                  } else if (hasToolStep) {
+                                    statusText =
+                                      '已停止执行（可展开上方步骤查看已执行的工具记录）。'
+                                  } else {
+                                    statusText = '已停止本次生成（模型尚未输出思考内容或正文）。'
+                                  }
+
+                                  if (!isBusy) {
+                                    if (hasThinkingStep || hasToolStep) {
+                                      actionLabel = '▶️ 基于当前进展继续回答'
+                                      onAction = () =>
                                         sendMessage(
-                                          '请根据上述步骤获取到的全部文档事实与调研结果，直接向我交付核心结论与关键要点分析报告。'
+                                          '请直接承接上方已完成的思考或执行进展，立刻向我交付完整、清晰的最终回答，无需重复思考。'
                                         )
-                                      }
-                                      className="apple-press inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0071e3]/10 hover:bg-[#0071e3]/18 text-[#0071e3] text-[12px] font-medium transition-colors"
-                                    >
-                                      <span>⚡️ 提炼输出核心结论与要点</span>
-                                    </button>
+                                    } else if (userPromptText) {
+                                      actionLabel = '🔄 重新发送该请求'
+                                      onAction = () =>
+                                        sendMessage(userPromptText, userTurn?.message?.attachments)
+                                    }
+                                  }
+                                } else {
+                                  if (hasToolStep) {
+                                    statusText =
+                                      '已完成工具调用，但模型未继续输出正文答复（可展开上方步骤查看执行详情）。'
+                                    actionLabel = '⚡️ 基于以上步骤直接生成回答'
+                                    onAction = () =>
+                                      sendMessage(
+                                        '请根据上述步骤获取到的全部事实与执行结果，直接向我交付完整、清晰的最终回答，无需再调用工具。'
+                                      )
+                                  } else if (hasThinkingStep) {
+                                    statusText =
+                                      '模型已完成思考，但未输出最终正文内容（可展开上方「已思考」查看推理过程）。'
+                                    actionLabel = '⚡️ 直接输出最终回答'
+                                    onAction = () =>
+                                      sendMessage(
+                                        '你刚才已完成思考过程但尚未输出正文内容，请直接输出完整、清晰的最终回答，无需重复思考。'
+                                      )
+                                  } else {
+                                    statusText =
+                                      '本次请求未收到模型返回的有效内容（可能接口流式提前断开、响应超时或返回格式不兼容）。'
+                                    if (userPromptText) {
+                                      actionLabel = '🔄 重新发送请求'
+                                      onAction = () =>
+                                        sendMessage(userPromptText, userTurn?.message?.attachments)
+                                    }
+                                  }
+                                }
+
+                                return (
+                                  <div className="flex flex-col gap-1.5 pt-1 pl-1 text-[13px] text-[#6e6e73] font-sans">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-4 text-center font-mono text-[11px] text-[#1d1d1f] select-none shrink-0">
+                                        ●
+                                      </span>
+                                      <span>{statusText}</span>
+                                    </div>
+                                    {onAction && actionLabel && !isBusy && (
+                                      <div className="pl-6">
+                                        <button
+                                          type="button"
+                                          onClick={onAction}
+                                          className="apple-press inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0071e3]/10 hover:bg-[#0071e3]/18 text-[#0071e3] text-[12px] font-medium transition-colors"
+                                        >
+                                          <span>{actionLabel}</span>
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
-                            )}
+                                )
+                              })()}
 
                             {/* 3. Non-Blocking Automatic Post-Turn Memory Crystallization Pill */}
                             {ast.crystallizedMemories.length > 0 && (
@@ -1517,7 +1714,9 @@ export const WorkbenchView: React.FC = () => {
                     <div className="pl-1 pt-1" ref={activeGeneratingRef}>
                       <ClaudeLiveStatusRow
                         startedAt={busyStartedAt}
-                        tokenCount={tokenStats.currentTokens}
+                        tokenCount={activeTurnSummary.turnTokens}
+                        phase={activeTurnSummary.phase}
+                        activeToolName={activeTurnSummary.activeToolName}
                         onInterrupt={abortGeneration}
                       />
                     </div>
